@@ -1,6 +1,7 @@
 package container
 
 import (
+	"litcontainer/filesys"
 	"litcontainer/pkg/logger"
 	"os"
 	"syscall"
@@ -8,7 +9,7 @@ import (
 
 func InitContainerProcess(args []string) error {
 	// 挂载proc
-	if err := MountProc(); err != nil {
+	if err := filesys.MountProc(); err != nil {
 		logger.Error("mount proc error: %v", err)
 		return err
 	}

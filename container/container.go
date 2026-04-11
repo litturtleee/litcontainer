@@ -2,6 +2,8 @@ package container
 
 import (
 	"github.com/urfave/cli"
+	"litcontainer/cgroups"
+	"litcontainer/enum"
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
@@ -9,10 +11,32 @@ import (
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
-func Run(args cli.Args, enableTTY bool) error {
+func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string) error {
 	// 构造 init 子命令的参数列表
 	argv := append([]string{"init"}, args...)
-	logger.Debug("container Run args: %v, enableTTY %v", argv, enableTTY)
+	logger.Debug("container Run args: %v", argv)
+	initCmd, err := NewInitProcess(argv, enableTTY, memoryLimit, cpuLimit)
+	if err != nil {
+		logger.Error("Failed to new init process: %v", err)
+		return err
+	}
+
+	cg, err := SetupCGroup(initCmd.Process.Pid, memoryLimit, cpuLimit)
+	if err != nil {
+		logger.Error("Failed to setup cgroup: %v", err)
+		return err
+	}
+	defer cg.Cleanup()
+
+	if err := initCmd.Wait(); err != nil {
+		logger.Error("Failed to wait initCmd, err: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func NewInitProcess(argv []string, enableTTY bool, memoryLimit string, cpuLimit string) (*exec.Cmd, error) {
 	self, _ := os.Executable()
 	initCmd := exec.Command(self, argv...)
 
@@ -31,27 +55,26 @@ func Run(args cli.Args, enableTTY bool) error {
 	// 启动容器进程并等待其完成
 	if err := initCmd.Start(); err != nil {
 		logger.Error("Failed to run initCmd, err: %v", err)
-		return err
+		return nil, err
 	}
 
-	if err := initCmd.Wait(); err != nil {
-		logger.Error("Failed to wait initCmd, err: %v", err)
-		return err
-	}
-
-	return nil
+	return initCmd, nil
 }
 
-// MountProc 挂载 proc 文件系统
-func MountProc() error {
-	// 设置挂载标志位：
-	// MS_NODEV: 不允许访问设备文件，增强安全性
-	// MS_NOEXEC: 不允许执行二进制文件，防止恶意代码执行
-	// MS_NOSUID: 忽略 setuid 和 setgid 位，防止权限提升
-	mountFlags := syscall.MS_NODEV | syscall.MS_NOEXEC | syscall.MS_NOSUID
-	if err := syscall.Mount("proc", "/proc", "proc", uintptr(mountFlags), ""); err != nil {
-		logger.Error("Failed to mount proc, err: %v", err)
-		return err
+func SetupCGroup(pid int, memoryLimit, cpuLimit string) (*cgroups.CGroupManager, error) {
+	cg := cgroups.NewCGroupManager(enum.AppName)
+	if memoryLimit != "" {
+		if err := cg.SetMemoryLimit(memoryLimit); err != nil {
+			return nil, err
+		}
 	}
-	return nil
+	if cpuLimit != "" {
+		if err := cg.SetCPULimit(cpuLimit); err != nil {
+			return nil, err
+		}
+	}
+	if err := cg.Apply(pid); err != nil {
+		return nil, err
+	}
+	return cg, nil
 }

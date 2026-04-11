@@ -25,6 +25,14 @@ var RunCommand = cli.Command{
 			Name:  "it",
 			Usage: "Run in interactive mode",
 		},
+		&cli.StringFlag{
+			Name:  "m",
+			Usage: "Memory limit for the container, e.g., 100m 1g",
+		},
+		&cli.StringFlag{
+			Name:  "cpus",
+			Usage: "CPU limit for the container, e.g., 1 1.5",
+		},
 	},
 	// 解析命令并执行
 	Action: func(c *cli.Context) error {
@@ -37,8 +45,11 @@ var RunCommand = cli.Command{
 		}
 		// 获取参数
 		enableTTY := c.Bool("it")
+		memoryLimit := c.String("m")
+		cpuLimit := c.String("cpus")
+		logger.Debug("enableTTY %s, memory limit: %s, cpu limit: %s", enableTTY, memoryLimit, cpuLimit)
 		// 调用container.Run
-		if err := container.Run(args, enableTTY); err != nil {
+		if err := container.Run(args, enableTTY, memoryLimit, cpuLimit); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}
