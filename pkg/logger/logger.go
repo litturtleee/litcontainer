@@ -67,8 +67,9 @@ type Logger struct {
 	*log.Logger
 	minLevel     LogLevel
 	includeTrace bool
+	includePID   bool
 	useColor     bool
-	output       io.Writer // 保存原始输出目标
+	output       io.Writer
 }
 
 func init() {
@@ -84,6 +85,7 @@ func NewLogger(out io.Writer, minLevel LogLevel, includeTrace bool) *Logger {
 		Logger:       log.New(out, "", log.LstdFlags),
 		minLevel:     minLevel,
 		includeTrace: includeTrace,
+		includePID:   false,
 		useColor:     isTerminal(out),
 		output:       out,
 	}
@@ -99,11 +101,16 @@ func (l *Logger) SetIncludeTrace(include bool) {
 	l.includeTrace = include
 }
 
+// 设置是否包含进程编号
+func (l *Logger) SetIncludePID(include bool) {
+	l.includePID = include
+}
+
 // 设置输出目标
 func (l *Logger) SetOutput(w io.Writer) {
 	l.output = w
 	l.Logger.SetOutput(w)
-	l.useColor = isTerminal(w) // 更新颜色设置
+	l.useColor = isTerminal(w)
 }
 
 // 设置时间格式 (空字符串表示不使用时间)
@@ -131,8 +138,6 @@ func (l *Logger) trace(skip int) string {
 		return " [???:?]"
 	}
 
-	// 仅保留文件名
-	// file = filepath.Base(file)
 	return fmt.Sprintf(" [%s:%d]", file, line)
 }
 
@@ -170,10 +175,15 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 		msg = format + fmt.Sprint(args...)
 	}
 
-	trace := l.trace(4) // 跳过4层调用栈
+	trace := l.trace(4)
 	coloredLevel := l.coloredLevel(level)
 
-	l.Logger.Printf("[%s]%s %s", coloredLevel, trace, msg)
+	pid := ""
+	if l.includePID {
+		pid = fmt.Sprintf(" [PID:%d]", os.Getpid())
+	}
+
+	l.Logger.Printf("[%s]%s%s %s", coloredLevel, pid, trace, msg)
 }
 
 // 各级别日志方法
@@ -203,6 +213,7 @@ func SetLevel(level LogLevel)      { std.SetLevel(level) }
 func SetOutput(w io.Writer)        { std.SetOutput(w) }
 func SetTimeFormat(format string)  { std.SetTimeFormat(format) }
 func SetIncludeTrace(include bool) { std.SetIncludeTrace(include) }
+func SetIncludePID(include bool)   { std.SetIncludePID(include) }
 func SetColor(enable bool)         { std.SetColor(enable) }
 
 func Debug(format string, v ...interface{}) { std.Debug(format, v...) }

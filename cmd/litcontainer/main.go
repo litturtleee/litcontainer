@@ -12,6 +12,7 @@ func init() {
 	logger.SetLevel(logger.DEBUG)
 	logger.SetIncludeTrace(true)
 	logger.SetOutput(os.Stdout)
+	logger.SetIncludePID(true)
 }
 
 func main() {
