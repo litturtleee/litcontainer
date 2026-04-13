@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/urfave/cli"
 	"litcontainer/container"
+	"litcontainer/image"
 	"litcontainer/pkg/logger"
 )
 
@@ -56,6 +57,28 @@ var RunCommand = cli.Command{
 		// 调用container.Run
 		if err := container.Run(args, enableTTY, memoryLimit, cpuLimit, mountVolumes); err != nil {
 			logger.Error("run command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
+var ExportCommand = cli.Command{
+	Name:  "export",
+	Usage: "Package the current running container into a tar file (docker export -o <tarfile> <imageName>)",
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name:  "o",
+			Usage: "Output file name for the tar file",
+		},
+	},
+	Action: func(c *cli.Context) error {
+		output := c.String("o")
+		if output == "" {
+			output = "container"
+		}
+		if err := image.Export(output); err != nil {
+			logger.Error("export command error: %v", err)
 			return err
 		}
 		return nil
