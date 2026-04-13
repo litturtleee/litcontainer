@@ -33,6 +33,10 @@ var RunCommand = cli.Command{
 			Name:  "cpus",
 			Usage: "CPU limit for the container, e.g., 1 1.5",
 		},
+		&cli.StringSliceFlag{
+			Name:  "v",
+			Usage: "Mount a volume, e.g., -v /tmp:/tmp -v /data:/data",
+		},
 	},
 	// 解析命令并执行
 	Action: func(c *cli.Context) error {
@@ -47,9 +51,10 @@ var RunCommand = cli.Command{
 		enableTTY := c.Bool("it")
 		memoryLimit := c.String("m")
 		cpuLimit := c.String("cpus")
-		logger.Debug("enableTTY %s, memory limit: %s, cpu limit: %s", enableTTY, memoryLimit, cpuLimit)
+		mountVolumes := c.StringSlice("v")
+		logger.Debug("enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s", enableTTY, memoryLimit, cpuLimit, mountVolumes)
 		// 调用container.Run
-		if err := container.Run(args, enableTTY, memoryLimit, cpuLimit); err != nil {
+		if err := container.Run(args, enableTTY, memoryLimit, cpuLimit, mountVolumes); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}

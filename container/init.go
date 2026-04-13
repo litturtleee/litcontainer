@@ -1,13 +1,13 @@
 package container
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
+	"litcontainer/config"
 	"litcontainer/filesys"
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
-	"strings"
 	"syscall"
 )
 
@@ -19,16 +19,13 @@ func InitContainerProcess() error {
 	// fd3-pipe
 	pipe := os.NewFile(uintptr(3), "pipe")
 	defer pipe.Close()
-	msg, err := io.ReadAll(pipe)
-	if err != nil {
-		logger.Error("read pipe error: %v", err)
-		return err
+	var containerConfig config.ContainerConfig
+	if err := json.NewDecoder(pipe).Decode(&containerConfig); err != nil {
+		logger.Error("Failed to decode config.json: %v", err)
+		return fmt.Errorf("failed to decode config.json, %w", err)
 	}
-	logger.Debug("read pipe message: %s", msg)
-
 	// byte->string
-	msgStr := string(msg)
-	cmdArgs := strings.Split(msgStr, " ")
+	cmdArgs := containerConfig.Command
 	if len(cmdArgs) == 0 {
 		logger.Error("InitContainerProcess user cmd is empty", cmdArgs)
 		return fmt.Errorf("InitContainerProcess user cmd is empty, %w", ErrInitInvalidArgs)
@@ -36,7 +33,7 @@ func InitContainerProcess() error {
 	logger.Debug("InitContainerProcess user cmd: ", cmdArgs)
 
 	// 挂载（pivot_root、proc、tmpfs)
-	if err := filesys.Mount(); err != nil {
+	if err := filesys.Mount(containerConfig.Mounts); err != nil {
 		logger.Error("mount error: %v", err)
 		return err
 	}

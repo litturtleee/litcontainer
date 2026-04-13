@@ -1,9 +1,11 @@
 package container
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/urfave/cli"
 	"litcontainer/cgroups"
+	"litcontainer/config"
 	"litcontainer/enum"
 	"litcontainer/filesys"
 	"litcontainer/pkg/logger"
@@ -20,7 +22,7 @@ const (
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
-func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string) error {
+func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string, mountVolumes []string) error {
 	logger.Debug("container Run args: %v", args)
 
 	initCmd, writePipe, err := NewInitProcess(enableTTY)
@@ -37,18 +39,25 @@ func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string) error {
 	}
 	defer cg.Cleanup()
 
-	// 将命令通过管道传给init命令
-	if err = SendInitCommand(writePipe, args); err != nil {
+	// 将container配置通过管道发给子进程
+	containerConfig, err := ParseContainerConfig(args, mountVolumes)
+	if err != nil {
+		logger.Error("Failed to parse container config: %v", err)
+		return err
+	}
+	if err = SendInitConfig(writePipe, containerConfig); err != nil {
 		logger.Error("Failed to send init command: %v", err)
 		return err
 	}
 
 	// 等待容器退出
 	if enableTTY {
-		if err := initCmd.Wait(); err != nil {
-			logger.Error("Failed to wait initCmd, err: %v", err)
-			return err
-		}
+		waitErr := initCmd.Wait()
+		// 子进程挂载的volume，这里看不到，会报错
+		//if err := filesys.UnMountVolume(MountPoint, containerConfig.Mounts); err != nil {
+		//	logger.Error("Failed to unmount volume: %v", err)
+		//}
+		return waitErr
 	}
 
 	return nil
@@ -116,13 +125,45 @@ func SetupCGroup(pid int, memoryLimit, cpuLimit string) (*cgroups.CGroupManager,
 	return cg, nil
 }
 
-func SendInitCommand(writePipe *os.File, cmd []string) error {
-	logger.Debug("SendInitCommand cmd: %v", cmd)
+func SendInitConfig(writePipe *os.File, containerConfig *config.ContainerConfig) error {
 	defer writePipe.Close()
-	command := strings.Join(cmd, " ")
-	if _, err := writePipe.WriteString(command); err != nil {
-		logger.Error("Failed to write command to pipe: %v", err)
-		return fmt.Errorf("failed to write command [%s] to pipe: %w", command, err)
+	encoder := json.NewEncoder(writePipe)
+	if err := encoder.Encode(&containerConfig); err != nil {
+		logger.Error("Failed to write config.json to pipe: %v", err)
+		return fmt.Errorf("failed to write config.json [%v] to pipe: %w", containerConfig, err)
 	}
 	return nil
+}
+
+func ParseContainerConfig(cmd, mountVolumes []string) (*config.ContainerConfig, error) {
+	volume, err := parseMountVolume(mountVolumes)
+	if err != nil {
+		logger.Error("Failed to parse container config: %v", err)
+		return nil, fmt.Errorf("failed to parse container config: %w", err)
+	}
+	containerConfig := config.ContainerConfig{
+		Command: cmd,
+		Mounts:  volume,
+	}
+	logger.Debug("container config is :%v")
+	return &containerConfig, nil
+}
+
+func parseMountVolume(mountVolumes []string) ([]config.MountConfig, error) {
+	if len(mountVolumes) == 0 {
+		return nil, nil
+	}
+
+	mounts := make([]config.MountConfig, 0)
+	for _, volume := range mountVolumes {
+		parts := strings.SplitN(volume, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid volume format: %s", volume)
+		}
+		mounts = append(mounts, config.MountConfig{
+			parts[0],
+			parts[1],
+		})
+	}
+	return mounts, nil
 }
