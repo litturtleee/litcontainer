@@ -5,11 +5,18 @@ import (
 	"github.com/urfave/cli"
 	"litcontainer/cgroups"
 	"litcontainer/enum"
+	"litcontainer/filesys"
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
+)
+
+const (
+	BusyboxTarPath = "/var/local/busybox-rootfs.tar"
+	MountPoint     = "/mnt/overlay"
+	BusyboxDir     = "/var/local/busybox"
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
@@ -21,6 +28,7 @@ func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string) error {
 		logger.Error("Failed to new init process: %v", err)
 		return err
 	}
+	defer filesys.UmountOverlayFS(BusyboxDir, MountPoint)
 
 	cg, err := SetupCGroup(initCmd.Process.Pid, memoryLimit, cpuLimit)
 	if err != nil {
@@ -59,6 +67,15 @@ func NewInitProcess(enableTTY bool) (*exec.Cmd, *os.File, error) {
 
 	// 带着句柄创建子进程，read会变成子进程的 fd 3
 	initCmd.ExtraFiles = []*os.File{read}
+
+	// 挂载overlay，通过工作目录让子进程感知
+	err = filesys.CreateOverlayFS(BusyboxDir, MountPoint, BusyboxTarPath)
+	if err != nil {
+		logger.Error("Failed to mount overlay: %v", err)
+		return nil, nil, err
+	}
+	// 修改子进程工作目录，子进程启动后就是
+	initCmd.Dir = MountPoint
 
 	// 配置 Linux 命名空间隔离标志
 	initCmd.SysProcAttr = &syscall.SysProcAttr{

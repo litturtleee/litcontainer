@@ -18,6 +18,7 @@ func InitContainerProcess() error {
 	// fd2-stderr
 	// fd3-pipe
 	pipe := os.NewFile(uintptr(3), "pipe")
+	defer pipe.Close()
 	msg, err := io.ReadAll(pipe)
 	if err != nil {
 		logger.Error("read pipe error: %v", err)
@@ -34,9 +35,9 @@ func InitContainerProcess() error {
 	}
 	logger.Debug("InitContainerProcess user cmd: ", cmdArgs)
 
-	// 挂载proc
-	if err := filesys.MountProc(); err != nil {
-		logger.Error("mount proc error: %v", err)
+	// 挂载（pivot_root、proc、tmpfs)
+	if err := filesys.Mount(); err != nil {
+		logger.Error("mount error: %v", err)
 		return err
 	}
 
