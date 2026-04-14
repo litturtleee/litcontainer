@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"github.com/urfave/cli"
+	"litcontainer/config"
 	"litcontainer/container"
 	"litcontainer/image"
 	"litcontainer/pkg/logger"
@@ -34,6 +35,10 @@ var RunCommand = cli.Command{
 			Usage: "Run container in detached mode",
 		},
 		&cli.StringFlag{
+			Name:  "name",
+			Usage: "Assign a name to the container",
+		},
+		&cli.StringFlag{
 			Name:  "m",
 			Usage: "Memory limit for the container, e.g., 100m 1g",
 		},
@@ -57,14 +62,20 @@ var RunCommand = cli.Command{
 		}
 		// 获取参数
 		enableTTY := c.Bool("it")
+		detached := c.Bool("d")
+		mountVolumes := c.StringSlice("v")
+		containerName := c.String("name")
 		memoryLimit := c.String("m")
 		cpuLimit := c.String("cpus")
-		mountVolumes := c.StringSlice("v")
-		detached := c.Bool("d")
 
 		if enableTTY && detached {
 			logger.Error("it and d can not be used together")
 			return fmt.Errorf("it and d can not be used together, %w", ErrInvalidArguments)
+		}
+
+		if containerName == "" {
+			logger.Error("container name can not be empty")
+			return fmt.Errorf("container name can not be empty, %w", ErrInvalidArguments)
 		}
 
 		logger.Debug(
@@ -72,7 +83,8 @@ var RunCommand = cli.Command{
 			cpuLimit, mountVolumes, detached,
 		)
 		// 调用container.Run
-		if err := container.Run(args, enableTTY, detached, memoryLimit, cpuLimit, mountVolumes, &wg); err != nil {
+		if err := container.Run(args, enableTTY, detached, containerName, memoryLimit, cpuLimit, mountVolumes,
+			&wg); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}
@@ -96,6 +108,18 @@ var ExportCommand = cli.Command{
 		}
 		if err := image.Export(output); err != nil {
 			logger.Error("export command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
+var PsCommand = cli.Command{
+	Name:  "ps",
+	Usage: "List all running containers",
+	Action: func(c *cli.Context) error {
+		if err := config.PrintContainersInfo(); err != nil {
+			logger.Error("ps command error: %v", err)
 			return err
 		}
 		return nil

@@ -11,7 +11,6 @@ import (
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"syscall"
 )
@@ -24,7 +23,7 @@ const (
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
-func Run(args cli.Args, enableTTY, detached bool, memoryLimit, cpuLimit string, mountVolumes []string,
+func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cpuLimit string, mountVolumes []string,
 	wg *sync.WaitGroup) error {
 	logger.Debug("container Run args: %v", args)
 
@@ -39,12 +38,20 @@ func Run(args cli.Args, enableTTY, detached bool, memoryLimit, cpuLimit string, 
 		return err
 	}
 
-	// 将container配置通过管道发给子进程
-	containerConfig, err := ParseContainerConfig(args, mountVolumes)
+	// 解析容器配置信息
+	containerConfig, err := config.ParseContainerConfig(initCmd, containerName, args, mountVolumes)
 	if err != nil {
 		logger.Error("Failed to parse container config: %v", err)
 		return err
 	}
+	// 写配置信息
+	err = config.WriteContainerConfig(containerConfig)
+	if err != nil {
+		logger.Error("Failed to write container config: %v", err)
+		return err
+	}
+
+	// 将container配置通过管道发给子进程
 	if err = SendInitConfig(writePipe, containerConfig); err != nil {
 		logger.Error("Failed to send init command: %v", err)
 		return err
@@ -58,7 +65,7 @@ func Run(args cli.Args, enableTTY, detached bool, memoryLimit, cpuLimit string, 
 		go func() {
 			defer wg.Done()
 			// 清理资源
-			defer cleanupResource(cg)
+			defer cleanupResource(cg, containerConfig)
 			waitErr := initCmd.Wait()
 			if waitErr != nil {
 				logger.Error("Container process exited with error: %v", waitErr)
@@ -70,7 +77,7 @@ func Run(args cli.Args, enableTTY, detached bool, memoryLimit, cpuLimit string, 
 
 	// 等待容器退出
 	if enableTTY {
-		defer cleanupResource(cg)
+		defer cleanupResource(cg, containerConfig)
 		waitErr := initCmd.Wait()
 		// 子进程挂载的volume，这里看不到，会报错
 		//if err := filesys.UnMountVolume(MountPoint, containerConfig.Mounts); err != nil {
@@ -85,7 +92,7 @@ func Run(args cli.Args, enableTTY, detached bool, memoryLimit, cpuLimit string, 
 
 	// 非交互单前台阻塞
 	waitErr := initCmd.Wait()
-	cleanupResource(cg)
+	cleanupResource(cg, containerConfig)
 	return waitErr
 }
 
@@ -173,48 +180,17 @@ func SendInitConfig(writePipe *os.File, containerConfig *config.ContainerConfig)
 	return nil
 }
 
-func ParseContainerConfig(cmd, mountVolumes []string) (*config.ContainerConfig, error) {
-	volume, err := parseMountVolume(mountVolumes)
-	if err != nil {
-		logger.Error("Failed to parse container config: %v", err)
-		return nil, fmt.Errorf("failed to parse container config: %w", err)
-	}
-	containerConfig := config.ContainerConfig{
-		Command: cmd,
-		Mounts:  volume,
-	}
-	logger.Debug("container config is :%v", containerConfig)
-	return &containerConfig, nil
-}
-
-func parseMountVolume(mountVolumes []string) ([]config.MountConfig, error) {
-	if len(mountVolumes) == 0 {
-		return nil, nil
-	}
-
-	mounts := make([]config.MountConfig, 0)
-	for _, volume := range mountVolumes {
-		parts := strings.SplitN(volume, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid volume format: %s", volume)
-		}
-		mounts = append(
-			mounts, config.MountConfig{
-				Source:      parts[0],
-				Destination: parts[1],
-			},
-		)
-	}
-	return mounts, nil
-}
-
 // cleanupResource 释放资源(删除cgroup、解挂载overlayfs)
-func cleanupResource(manager *cgroups.CGroupManager) {
+func cleanupResource(manager *cgroups.CGroupManager, containerConfig *config.ContainerConfig) {
 	if err := manager.Cleanup(); err != nil {
 		logger.Error("Failed to cleanup resource: %v", err)
 	}
 
 	if err := filesys.UmountOverlayFS(BusyboxDir, MountPoint); err != nil {
 		logger.Error("Failed to umount overlayfs: %v", err)
+	}
+
+	if err := config.UpdateContainerConfig(containerConfig.Id, enum.ContainerStoppedState); err != nil {
+		logger.Error("Failed to update container config: %v", err)
 	}
 }
