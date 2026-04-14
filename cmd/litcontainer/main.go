@@ -26,6 +26,7 @@ func main() {
 		commands.InitCommand,
 		commands.ExportCommand,
 		commands.PsCommand,
+		commands.LogCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

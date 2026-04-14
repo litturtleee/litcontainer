@@ -11,6 +11,7 @@ import (
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 )
@@ -19,7 +20,6 @@ const (
 	BusyboxTarPath = "/var/local/busybox-rootfs.tar"
 	MountPoint     = "/mnt/overlay"
 	BusyboxDir     = "/var/local/busybox"
-	LogDir         = "/var/log/litcontainer"
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
@@ -27,7 +27,14 @@ func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cp
 	wg *sync.WaitGroup) error {
 	logger.Debug("container Run args: %v", args)
 
-	initCmd, writePipe, err := NewInitProcess(enableTTY)
+	// 解析容器配置信息
+	containerConfig, err := config.ParseContainerConfig(containerName, args, mountVolumes)
+	if err != nil {
+		logger.Error("Failed to parse container config: %v", err)
+		return err
+	}
+
+	initCmd, writePipe, err := NewInitProcess(enableTTY, containerConfig)
 	if err != nil {
 		logger.Error("Failed to new init process: %v", err)
 		return err
@@ -38,13 +45,8 @@ func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cp
 		return err
 	}
 
-	// 解析容器配置信息
-	containerConfig, err := config.ParseContainerConfig(initCmd, containerName, args, mountVolumes)
-	if err != nil {
-		logger.Error("Failed to parse container config: %v", err)
-		return err
-	}
-	// 写配置信息
+	// 配置信息落文件
+	containerConfig.Pid = initCmd.Process.Pid
 	err = config.WriteContainerConfig(containerConfig)
 	if err != nil {
 		logger.Error("Failed to write container config: %v", err)
@@ -96,7 +98,7 @@ func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cp
 	return waitErr
 }
 
-func NewInitProcess(enableTTY bool) (*exec.Cmd, *os.File, error) {
+func NewInitProcess(enableTTY bool, containerConfig *config.ContainerConfig) (*exec.Cmd, *os.File, error) {
 	// 创建匿名通道
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -130,13 +132,18 @@ func NewInitProcess(enableTTY bool) (*exec.Cmd, *os.File, error) {
 		initCmd.Stdout = os.Stdout
 		initCmd.Stderr = os.Stderr
 	} else {
-		os.MkdirAll(LogDir, 0755)
-
-		logFile, err := os.Create(fmt.Sprintf("%s/container.log", LogDir))
+		containerLogDir := filepath.Join(config.DefaultLitContainerDir, containerConfig.Id)
+		if err := os.MkdirAll(containerLogDir, 0755); err != nil {
+			logger.Error("Failed to create container directory: %v", err)
+			return nil, nil, err
+		}
+		containerLogFile := filepath.Join(containerLogDir, DefaultContainerLogFileName)
+		logFile, err := os.Create(containerLogFile)
 		if err != nil {
 			logger.Error("Failed to create log file: %v", err)
 			return nil, nil, fmt.Errorf("failed to create log file: %w", err)
 		}
+		defer logFile.Close()
 		initCmd.Stdout = logFile
 		initCmd.Stderr = logFile
 	}

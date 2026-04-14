@@ -8,7 +8,6 @@ import (
 	"litcontainer/enum"
 	"litcontainer/pkg/logger"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -61,7 +60,7 @@ func WriteContainerConfig(containerConfig *ContainerConfig) error {
 }
 
 // ParseContainerConfig 解析容器配置
-func ParseContainerConfig(initCmd *exec.Cmd, containerName string, cmd, mountVolumes []string) (*ContainerConfig,
+func ParseContainerConfig(containerName string, cmd, mountVolumes []string) (*ContainerConfig,
 	error) {
 	volume, err := parseMountVolume(mountVolumes)
 	if err != nil {
@@ -71,7 +70,6 @@ func ParseContainerConfig(initCmd *exec.Cmd, containerName string, cmd, mountVol
 	containerConfig := ContainerConfig{
 		Id:      generateRandomContainerID(),
 		Name:    containerName,
-		Pid:     initCmd.Process.Pid,
 		State:   enum.ContainerRunningState,
 		StartAt: time.Now().Format(time.DateTime),
 		Command: cmd,

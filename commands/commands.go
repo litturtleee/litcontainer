@@ -126,6 +126,30 @@ var PsCommand = cli.Command{
 	},
 }
 
+var LogCommand = cli.Command{
+	Name:  "log",
+	Usage: "Show the log of a container",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "f",
+			Usage: "Follow the log",
+		},
+	},
+	Action: func(c *cli.Context) error {
+		containerID := c.Args().First()
+		if len(containerID) < 12 {
+			logger.Error("container id is invalid")
+			return fmt.Errorf("container id is invalid, %w", ErrInvalidArguments)
+		}
+		follow := c.Bool("f")
+		if err := container.PrintContainerLog(containerID, follow); err != nil {
+			logger.Error("log command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
 func WaitAll() {
 	wg.Wait()
 }
