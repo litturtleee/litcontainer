@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -19,10 +20,12 @@ const (
 	BusyboxTarPath = "/var/local/busybox-rootfs.tar"
 	MountPoint     = "/mnt/overlay"
 	BusyboxDir     = "/var/local/busybox"
+	LogDir         = "/var/log/litcontainer"
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
-func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string, mountVolumes []string) error {
+func Run(args cli.Args, enableTTY, detached bool, memoryLimit, cpuLimit string, mountVolumes []string,
+	wg *sync.WaitGroup) error {
 	logger.Debug("container Run args: %v", args)
 
 	initCmd, writePipe, err := NewInitProcess(enableTTY)
@@ -30,14 +33,11 @@ func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string, mountVolum
 		logger.Error("Failed to new init process: %v", err)
 		return err
 	}
-	defer filesys.UmountOverlayFS(BusyboxDir, MountPoint)
-
 	cg, err := SetupCGroup(initCmd.Process.Pid, memoryLimit, cpuLimit)
 	if err != nil {
 		logger.Error("Failed to setup cgroup: %v", err)
 		return err
 	}
-	defer cg.Cleanup()
 
 	// 将container配置通过管道发给子进程
 	containerConfig, err := ParseContainerConfig(args, mountVolumes)
@@ -50,17 +50,43 @@ func Run(args cli.Args, enableTTY bool, memoryLimit, cpuLimit string, mountVolum
 		return err
 	}
 
+	// 先简单让这个主进程在这等
+	// todo: 由shim进程监控
+	if detached {
+		logger.Info("Container started in background with PID:%v", initCmd.Process.Pid)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// 清理资源
+			defer cleanupResource(cg)
+			waitErr := initCmd.Wait()
+			if waitErr != nil {
+				logger.Error("Container process exited with error: %v", waitErr)
+			}
+			logger.Info("Container process exited, PID: %v", initCmd.Process.Pid)
+		}()
+		return nil
+	}
+
 	// 等待容器退出
 	if enableTTY {
+		defer cleanupResource(cg)
 		waitErr := initCmd.Wait()
 		// 子进程挂载的volume，这里看不到，会报错
 		//if err := filesys.UnMountVolume(MountPoint, containerConfig.Mounts); err != nil {
 		//	logger.Error("Failed to unmount volume: %v", err)
 		//}
+		if waitErr != nil {
+			logger.Error("Container process exited with error: %v", waitErr)
+		}
+		logger.Info("Container process exited, PID: %v", initCmd.Process.Pid)
 		return waitErr
 	}
 
-	return nil
+	// 非交互单前台阻塞
+	waitErr := initCmd.Wait()
+	cleanupResource(cg)
+	return waitErr
 }
 
 func NewInitProcess(enableTTY bool) (*exec.Cmd, *os.File, error) {
@@ -96,6 +122,16 @@ func NewInitProcess(enableTTY bool) (*exec.Cmd, *os.File, error) {
 		initCmd.Stdin = os.Stdin
 		initCmd.Stdout = os.Stdout
 		initCmd.Stderr = os.Stderr
+	} else {
+		os.MkdirAll(LogDir, 0755)
+
+		logFile, err := os.Create(fmt.Sprintf("%s/container.log", LogDir))
+		if err != nil {
+			logger.Error("Failed to create log file: %v", err)
+			return nil, nil, fmt.Errorf("failed to create log file: %w", err)
+		}
+		initCmd.Stdout = logFile
+		initCmd.Stderr = logFile
 	}
 
 	// 启动容器进程并等待其完成
@@ -103,6 +139,8 @@ func NewInitProcess(enableTTY bool) (*exec.Cmd, *os.File, error) {
 		logger.Error("Failed to run initCmd, err: %v", err)
 		return nil, nil, err
 	}
+
+	logger.Info("InitPorcess start success, PID: %v", initCmd.Process.Pid)
 
 	return initCmd, write, nil
 }
@@ -145,7 +183,7 @@ func ParseContainerConfig(cmd, mountVolumes []string) (*config.ContainerConfig, 
 		Command: cmd,
 		Mounts:  volume,
 	}
-	logger.Debug("container config is :%v")
+	logger.Debug("container config is :%v", containerConfig)
 	return &containerConfig, nil
 }
 
@@ -160,10 +198,23 @@ func parseMountVolume(mountVolumes []string) ([]config.MountConfig, error) {
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid volume format: %s", volume)
 		}
-		mounts = append(mounts, config.MountConfig{
-			parts[0],
-			parts[1],
-		})
+		mounts = append(
+			mounts, config.MountConfig{
+				Source:      parts[0],
+				Destination: parts[1],
+			},
+		)
 	}
 	return mounts, nil
+}
+
+// cleanupResource 释放资源(删除cgroup、解挂载overlayfs)
+func cleanupResource(manager *cgroups.CGroupManager) {
+	if err := manager.Cleanup(); err != nil {
+		logger.Error("Failed to cleanup resource: %v", err)
+	}
+
+	if err := filesys.UmountOverlayFS(BusyboxDir, MountPoint); err != nil {
+		logger.Error("Failed to umount overlayfs: %v", err)
+	}
 }

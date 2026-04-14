@@ -10,17 +10,17 @@ import (
 )
 
 // CreateOverlayFS 基于busybox镜像创建 overlay 文件系统
-func CreateOverlayFS(busyboxDir, mountPoint, tarPath string) error {
+func CreateOverlayFS(lowerDir, mountPoint, tarPath string) error {
 	// 解压busybox镜像快照
 	// 1. 检查busybox目录是否存在
-	if _, err := os.Stat(busyboxDir); os.IsNotExist(err) {
+	if _, err := os.Stat(lowerDir); os.IsNotExist(err) {
 		logger.Debug("start to untar busybox.tar, tarPath: %v", tarPath)
-		if err := os.Mkdir(busyboxDir, 0755); err != nil {
+		if err := os.Mkdir(lowerDir, 0755); err != nil {
 			logger.Error("Error creating busybox directory: %v", err)
 			return err
 		}
 
-		output, err := exec.Command("tar", "-xvf", tarPath, "-C", busyboxDir).CombinedOutput()
+		output, err := exec.Command("tar", "-xvf", tarPath, "-C", lowerDir).CombinedOutput()
 		if err != nil {
 			logger.Error("failed to extract %s: err %v output %s", tarPath, err, string(output))
 			return err
@@ -28,9 +28,8 @@ func CreateOverlayFS(busyboxDir, mountPoint, tarPath string) error {
 	}
 
 	// 2.准备upper和work目录
-	lowerDir := busyboxDir
-	upperDir := filepath.Join(filepath.Dir(busyboxDir), "upper")
-	workDir := filepath.Join(filepath.Dir(busyboxDir), "work")
+	upperDir := filepath.Join(filepath.Dir(lowerDir), "upper")
+	workDir := filepath.Join(filepath.Dir(lowerDir), "work")
 
 	// 3.使用overlayFS挂载
 	err := MountOverlayFS(lowerDir, upperDir, workDir, mountPoint)
@@ -66,7 +65,7 @@ func MountOverlayFS(lowerDir, upperDir, workDir, mountPoint string) error {
 }
 
 // UmountOverlayFS 卸载 overlay 文件系统
-func UmountOverlayFS(busyboxDir, mountPoint string) error {
+func UmountOverlayFS(lowerDir, mountPoint string) error {
 	// 先尝试普通 unmount，失败后 fallback 到 lazy unmount
 	if err := syscall.Unmount(mountPoint, 0); err != nil {
 		logger.Debug("Normal unmount failed for %v, trying MNT_DETACH: %v", mountPoint, err)
@@ -77,11 +76,11 @@ func UmountOverlayFS(busyboxDir, mountPoint string) error {
 	}
 
 	// 删除upper和work（lazy unmount 后内核可能仍持有引用，删除失败仅告警不阻断）
-	upperDir := filepath.Join(filepath.Dir(busyboxDir), "upper")
+	upperDir := filepath.Join(filepath.Dir(lowerDir), "upper")
 	if err := os.RemoveAll(upperDir); err != nil {
 		logger.Warn("Failed to remove upper directory [%v]: %v", upperDir, err)
 	}
-	workDir := filepath.Join(filepath.Dir(busyboxDir), "work")
+	workDir := filepath.Join(filepath.Dir(lowerDir), "work")
 	if err := os.RemoveAll(workDir); err != nil {
 		logger.Warn("Failed to remove work directory [%v]: %v", workDir, err)
 	}

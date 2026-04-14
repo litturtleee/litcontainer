@@ -30,4 +30,7 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		logger.Error("App run Error: %v", err)
 	}
+
+	// 阻塞等待直到所有容器退出
+	commands.WaitAll()
 }

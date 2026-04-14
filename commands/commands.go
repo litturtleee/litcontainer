@@ -6,7 +6,10 @@ import (
 	"litcontainer/container"
 	"litcontainer/image"
 	"litcontainer/pkg/logger"
+	"sync"
 )
+
+var wg sync.WaitGroup
 
 var InitCommand = cli.Command{
 	Name:  "init",
@@ -25,6 +28,10 @@ var RunCommand = cli.Command{
 		&cli.BoolFlag{
 			Name:  "it",
 			Usage: "Run in interactive mode",
+		},
+		&cli.BoolFlag{
+			Name:  "d",
+			Usage: "Run container in detached mode",
 		},
 		&cli.StringFlag{
 			Name:  "m",
@@ -53,9 +60,19 @@ var RunCommand = cli.Command{
 		memoryLimit := c.String("m")
 		cpuLimit := c.String("cpus")
 		mountVolumes := c.StringSlice("v")
-		logger.Debug("enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s", enableTTY, memoryLimit, cpuLimit, mountVolumes)
+		detached := c.Bool("d")
+
+		if enableTTY && detached {
+			logger.Error("it and d can not be used together")
+			return fmt.Errorf("it and d can not be used together, %w", ErrInvalidArguments)
+		}
+
+		logger.Debug(
+			"enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s, detached: %s", enableTTY, memoryLimit,
+			cpuLimit, mountVolumes, detached,
+		)
 		// 调用container.Run
-		if err := container.Run(args, enableTTY, memoryLimit, cpuLimit, mountVolumes); err != nil {
+		if err := container.Run(args, enableTTY, detached, memoryLimit, cpuLimit, mountVolumes, &wg); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}
@@ -83,4 +100,8 @@ var ExportCommand = cli.Command{
 		}
 		return nil
 	},
+}
+
+func WaitAll() {
+	wg.Wait()
 }
