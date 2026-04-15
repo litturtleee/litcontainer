@@ -27,6 +27,7 @@ type ContainerConfig struct {
 	Image    string        `json:"image"`
 	Pid      int           `json:"pid"`
 	Command  []string      `json:"command"`
+	Envs     []string      `json:"envs"`
 	Mounts   []MountConfig `json:"mounts,omitempty"`
 	State    string        `json:"state"`
 	StartAt  string        `json:"startAt"`
@@ -63,7 +64,7 @@ func WriteContainerConfig(containerConfig *ContainerConfig) error {
 }
 
 // ParseContainerConfig 解析容器配置
-func ParseContainerConfig(image, containerName string, cmd, mountVolumes []string) (*ContainerConfig,
+func ParseContainerConfig(image, containerName string, cmd, mountVolumes, envs []string) (*ContainerConfig,
 	error) {
 	volume, err := parseMountVolume(mountVolumes)
 	if err != nil {
@@ -77,6 +78,7 @@ func ParseContainerConfig(image, containerName string, cmd, mountVolumes []strin
 		State:   enum.ContainerRunningState,
 		StartAt: time.Now().Format(time.DateTime),
 		Command: cmd,
+		Envs:    envs,
 		Mounts:  volume,
 	}
 	logger.Debug("container config is :%v", containerConfig)

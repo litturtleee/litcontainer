@@ -52,6 +52,10 @@ var RunCommand = cli.Command{
 			Name:  "v",
 			Usage: "Mount a volume, e.g., -v /tmp:/tmp -v /data:/data",
 		},
+		&cli.StringSliceFlag{
+			Name:  "e",
+			Usage: "Set environment variables for the container, e.g., -e KEY=VALUE",
+		},
 	},
 	// 解析命令并执行
 	Action: func(c *cli.Context) error {
@@ -66,6 +70,7 @@ var RunCommand = cli.Command{
 		enableTTY := c.Bool("it")
 		detached := c.Bool("d")
 		mountVolumes := c.StringSlice("v")
+		envs := c.StringSlice("e")
 		containerName := c.String("name")
 		memoryLimit := c.String("m")
 		cpuLimit := c.String("cpus")
@@ -88,7 +93,7 @@ var RunCommand = cli.Command{
 		// 调用container.Run
 		if err := container.Run(args[1:], enableTTY, detached,
 			imageName, containerName, memoryLimit, cpuLimit,
-			mountVolumes, &wg); err != nil {
+			mountVolumes, envs, &wg); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}

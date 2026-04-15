@@ -23,12 +23,11 @@ const (
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
 func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memoryLimit, cpuLimit string,
-	mountVolumes []string,
-	wg *sync.WaitGroup) error {
+	mountVolumes []string, envs []string, wg *sync.WaitGroup) error {
 	logger.Debug("container Run args: %v", args)
 
 	// 解析容器配置信息
-	containerConfig, err := config.ParseContainerConfig(imageName, containerName, args, mountVolumes)
+	containerConfig, err := config.ParseContainerConfig(imageName, containerName, args, mountVolumes, envs)
 	if err != nil {
 		logger.Error("Failed to parse container config: %v", err)
 		return err
@@ -123,6 +122,9 @@ func NewInitProcess(enableTTY bool, containerConfig *config.ContainerConfig) (*e
 
 	// 带着句柄创建子进程，read会变成子进程的 fd 3
 	initCmd.ExtraFiles = []*os.File{read}
+	if len(containerConfig.Envs) > 0 {
+		initCmd.Env = append(os.Environ(), containerConfig.Envs...)
+	}
 
 	// 挂载overlay，通过工作目录让子进程感知
 	mountPoint, err := filesys.CreateOverlayFS(containerConfig)
