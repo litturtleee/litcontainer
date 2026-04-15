@@ -11,6 +11,7 @@ import (
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -58,6 +59,17 @@ func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cp
 		logger.Error("Failed to send init command: %v", err)
 		return err
 	}
+
+	// 注册信号处理，父进程受到信号后避免直接杀死goroutine而泄露资源
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		logger.Info("Received signal %v, shutting down container, containerId: %s, containerName: %s",
+			containerConfig.Id, containerConfig.Name, sig)
+		initCmd.Process.Signal(syscall.SIGTERM)
+	}()
 
 	// 先简单让这个主进程在这等
 	// todo: 由shim进程监控

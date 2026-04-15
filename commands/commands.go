@@ -189,6 +189,27 @@ var ExecContainerCommand = cli.Command{
 	},
 }
 
+var StopContainerCommand = cli.Command{
+	Name:  "stop",
+	Usage: "Stop a running container",
+	Action: func(c *cli.Context) error {
+		if c.NArg() == 0 {
+			logger.Error("at least one container name or ID must be specified")
+			return fmt.Errorf("at least one container name or ID must be specified, %w", ErrInvalidArguments)
+		}
+		containerIdOrName := c.Args().First()
+		if len(containerIdOrName) == 0 {
+			logger.Error("container name cannot be empty")
+			return fmt.Errorf("container name cannot be empty, %w", ErrInvalidArguments)
+		}
+		if err := container.StopContainer(containerIdOrName); err != nil {
+			logger.Error("stop command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
 func WaitAll() {
 	wg.Wait()
 }

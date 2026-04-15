@@ -29,6 +29,7 @@ func main() {
 		commands.LogCommand,
 		commands.ExecCommand,
 		commands.ExecContainerCommand,
+		commands.StopContainerCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

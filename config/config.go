@@ -137,6 +137,65 @@ func GetContainerConfigByName(name string) (*ContainerConfig, error) {
 	return nil, fmt.Errorf("container %s does not exist", name)
 }
 
+func GetContainerConfig(idOrName string) (*ContainerConfig, error) {
+	containerConfig, err := GetContainerConfigById(idOrName)
+	if err != nil {
+		return nil, err
+	}
+
+	if containerConfig != nil {
+		logger.Debug("Find container config by id, id:%s", idOrName)
+		return containerConfig, nil
+	}
+
+	containerConfig, err = GetContainerConfigByName(idOrName)
+	if err != nil {
+		return nil, err
+	}
+	if containerConfig != nil {
+		logger.Debug("Find container config by name, name:%s", idOrName)
+		return containerConfig, nil
+	}
+
+	logger.Error("Container cannot be found, idOrName: %s", idOrName)
+	return nil, fmt.Errorf("container %s does not exist", idOrName)
+}
+
+func GetContainerConfigById(containerId string) (*ContainerConfig, error) {
+	if len(containerId) >= 12 {
+		fullId := ""
+		dirs, err := os.ReadDir(DefaultLitContainerDir)
+		if err != nil {
+			logger.Error("Failed to read container config, err: %v", err)
+			return nil, err
+		}
+		for _, dir := range dirs {
+			if dir.IsDir() && strings.HasPrefix(dir.Name(), containerId) {
+				fullId = dir.Name()
+				break
+			}
+		}
+		if fullId != "" {
+			configPath := filepath.Join(DefaultLitContainerDir, fullId, DefaultConfigFileName)
+			fileStr, err := os.ReadFile(configPath)
+			if err != nil {
+				logger.Error("Failed to read container config, filepath: %v, err: %v", configPath, err)
+				return nil, err
+			}
+			var config ContainerConfig
+			err = json.Unmarshal(fileStr, &config)
+			if err != nil {
+				logger.Error("Failed to unmarshal container config, filepath: %v, err: %v", configPath, err)
+				return nil, err
+			}
+			return &config, nil
+		}
+	}
+	// 打印日志，id小于12，无法查出容器
+	logger.Debug("Container cannot be found when ID length is less than 12 characters")
+	return nil, nil
+}
+
 func readAllContainerConfigs() ([]*ContainerConfig, error) {
 	if _, err := os.Stat(DefaultLitContainerDir); err != nil {
 		logger.Error("Failed to read container config, err: %v", err)
