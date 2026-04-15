@@ -122,6 +122,21 @@ func UpdateContainerConfig(containerId string, state string) error {
 	return WriteContainerConfig(config)
 }
 
+// GetContainerConfigByName 获取容器配置
+func GetContainerConfigByName(name string) (*ContainerConfig, error) {
+	configs, err := readAllContainerConfigs()
+	if err != nil {
+		logger.Error("Failed to read container config, err: %v", err)
+		return nil, err
+	}
+	for _, config := range configs {
+		if strings.EqualFold(config.Name, name) {
+			return config, nil
+		}
+	}
+	return nil, fmt.Errorf("container %s does not exist", name)
+}
+
 func readAllContainerConfigs() ([]*ContainerConfig, error) {
 	if _, err := os.Stat(DefaultLitContainerDir); err != nil {
 		logger.Error("Failed to read container config, err: %v", err)

@@ -13,8 +13,9 @@ import (
 var wg sync.WaitGroup
 
 var InitCommand = cli.Command{
-	Name:  "init",
-	Usage: "Init container process run user's process in container. Do not call it outside",
+	Name:   "init",
+	Usage:  "Init container process run user's process in container. Do not call it outside",
+	Hidden: true,
 	Action: func(c *cli.Context) error {
 		logger.Debug("init command, args: %v", c.Args())
 		return container.InitContainerProcess()
@@ -144,6 +145,44 @@ var LogCommand = cli.Command{
 		follow := c.Bool("f")
 		if err := container.PrintContainerLog(containerID, follow); err != nil {
 			logger.Error("log command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
+var ExecCommand = cli.Command{
+	Name:  "exec",
+	Usage: "Execute a command in a running container",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "it",
+			Usage: "Run in interactive mode",
+		},
+	},
+	Action: func(c *cli.Context) error {
+		if len(c.Args()) < 2 {
+			return fmt.Errorf("usage: litcontainer exec [-it] <name> <command> [args...], %w", ErrInvalidArguments)
+		}
+		enableTTY := c.Bool("it")
+		containerName := c.Args().Get(0)
+		args := c.Args()[1:]
+
+		if err := container.Exec(enableTTY, containerName, args); err != nil {
+			logger.Error("exec command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
+var ExecContainerCommand = cli.Command{
+	Name:   "exec-container",
+	Usage:  "Execute a command in a running container, Do not call it outside",
+	Hidden: true,
+	Action: func(c *cli.Context) error {
+		if err := container.ExecContainer(c.Args()); err != nil {
+			logger.Error("exec-container command error: %v", err)
 			return err
 		}
 		return nil

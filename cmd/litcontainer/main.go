@@ -27,6 +27,8 @@ func main() {
 		commands.ExportCommand,
 		commands.PsCommand,
 		commands.LogCommand,
+		commands.ExecCommand,
+		commands.ExecContainerCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

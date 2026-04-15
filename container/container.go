@@ -123,7 +123,11 @@ func NewInitProcess(enableTTY bool, containerConfig *config.ContainerConfig) (*e
 
 	// 配置 Linux 命名空间隔离标志
 	initCmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC,
+		Cloneflags: syscall.CLONE_NEWUTS |
+			syscall.CLONE_NEWPID |
+			syscall.CLONE_NEWNS |
+			syscall.CLONE_NEWNET |
+			syscall.CLONE_NEWIPC,
 	}
 
 	// 配置交互式终端的标准流
