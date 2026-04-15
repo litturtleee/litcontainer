@@ -210,6 +210,34 @@ var StopContainerCommand = cli.Command{
 	},
 }
 
+var RemoveContainerCommand = cli.Command{
+	Name:  "rm",
+	Usage: "Remove a container",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "f",
+			Usage: "Force remove a running container",
+		},
+	},
+	Action: func(c *cli.Context) error {
+		if c.NArg() == 0 {
+			logger.Error("at least one container name or ID must be specified")
+			return fmt.Errorf("at least one container name or ID must be specified, %w", ErrInvalidArguments)
+		}
+		force := c.Bool("f")
+		containerIdOrName := c.Args().First()
+		if len(containerIdOrName) == 0 {
+			logger.Error("container name cannot be empty")
+			return fmt.Errorf("container name cannot be empty, %w", ErrInvalidArguments)
+		}
+		if err := container.RemoveContainer(containerIdOrName, force); err != nil {
+			logger.Error("remove command error: %v", err)
+			return err
+		}
+		return nil
+	},
+}
+
 func WaitAll() {
 	wg.Wait()
 }

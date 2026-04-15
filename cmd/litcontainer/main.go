@@ -30,6 +30,7 @@ func main() {
 		commands.ExecCommand,
 		commands.ExecContainerCommand,
 		commands.StopContainerCommand,
+		commands.RemoveContainerCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {
