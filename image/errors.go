@@ -3,5 +3,5 @@ package image
 import "errors"
 
 var (
-	ErrImageNameInvalid = errors.New("image name invalid")
+	ErrContainerNameInvalid = errors.New("container name invalid")
 )

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"github.com/urfave/cli"
 	"litcontainer/config"
@@ -57,9 +58,9 @@ var RunCommand = cli.Command{
 		// 获取参数列表
 		args := c.Args()
 		logger.Debug("run command args: %v.", args)
-		if len(args) == 0 {
-			logger.Error("run command need at least one argument")
-			return fmt.Errorf("run command neeed at least one argument, %w", ErrInvalidArguments)
+		if len(args) < 2 {
+			logger.Error("run command need at least two argument")
+			return fmt.Errorf("run command neeed at least two argument, %w", ErrInvalidArguments)
 		}
 		// 获取参数
 		enableTTY := c.Bool("it")
@@ -68,6 +69,7 @@ var RunCommand = cli.Command{
 		containerName := c.String("name")
 		memoryLimit := c.String("m")
 		cpuLimit := c.String("cpus")
+		imageName := args[0]
 
 		if enableTTY && detached {
 			logger.Error("it and d can not be used together")
@@ -80,12 +82,13 @@ var RunCommand = cli.Command{
 		}
 
 		logger.Debug(
-			"enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s, detached: %s", enableTTY, memoryLimit,
-			cpuLimit, mountVolumes, detached,
+			"enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s, detached: %s, imageName: %s, containerName: %s",
+			enableTTY, memoryLimit, cpuLimit, mountVolumes, detached, imageName, containerName,
 		)
 		// 调用container.Run
-		if err := container.Run(args, enableTTY, detached, containerName, memoryLimit, cpuLimit, mountVolumes,
-			&wg); err != nil {
+		if err := container.Run(args[1:], enableTTY, detached,
+			imageName, containerName, memoryLimit, cpuLimit,
+			mountVolumes, &wg); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}
@@ -103,11 +106,16 @@ var ExportCommand = cli.Command{
 		},
 	},
 	Action: func(c *cli.Context) error {
+		if len(c.Args()) == 0 {
+			logger.Error("Usage: tinydocker export [-o <tarfile>] <containerName>")
+			return errors.New("Usage: tinydocker export [-o <tarfile>]  <containerName>")
+		}
+		containerName := c.Args().Get(0)
 		output := c.String("o")
 		if output == "" {
 			output = "container"
 		}
-		if err := image.Export(output); err != nil {
+		if err := image.Export(containerName, output); err != nil {
 			logger.Error("export command error: %v", err)
 			return err
 		}

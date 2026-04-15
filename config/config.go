@@ -17,11 +17,14 @@ import (
 const (
 	DefaultLitContainerDir = "/var/lib/litcontainer/container"
 	DefaultConfigFileName  = "config.json"
+	DefaultImageDir        = "/var/lib/litcontainer/image"
+	DefaultOverlayfsDir    = "/var/lib/litcontainer/overlay"
 )
 
 type ContainerConfig struct {
 	Id       string        `json:"id"`
 	Name     string        `json:"name"`
+	Image    string        `json:"image"`
 	Pid      int           `json:"pid"`
 	Command  []string      `json:"command"`
 	Mounts   []MountConfig `json:"mounts,omitempty"`
@@ -60,7 +63,7 @@ func WriteContainerConfig(containerConfig *ContainerConfig) error {
 }
 
 // ParseContainerConfig 解析容器配置
-func ParseContainerConfig(containerName string, cmd, mountVolumes []string) (*ContainerConfig,
+func ParseContainerConfig(image, containerName string, cmd, mountVolumes []string) (*ContainerConfig,
 	error) {
 	volume, err := parseMountVolume(mountVolumes)
 	if err != nil {
@@ -70,6 +73,7 @@ func ParseContainerConfig(containerName string, cmd, mountVolumes []string) (*Co
 	containerConfig := ContainerConfig{
 		Id:      generateRandomContainerID(),
 		Name:    containerName,
+		Image:   image,
 		State:   enum.ContainerRunningState,
 		StartAt: time.Now().Format(time.DateTime),
 		Command: cmd,

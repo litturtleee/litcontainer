@@ -19,17 +19,16 @@ import (
 
 const (
 	BusyboxTarPath = "/var/local/busybox-rootfs.tar"
-	MountPoint     = "/mnt/overlay"
-	BusyboxDir     = "/var/local/busybox"
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
-func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cpuLimit string, mountVolumes []string,
+func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memoryLimit, cpuLimit string,
+	mountVolumes []string,
 	wg *sync.WaitGroup) error {
 	logger.Debug("container Run args: %v", args)
 
 	// 解析容器配置信息
-	containerConfig, err := config.ParseContainerConfig(containerName, args, mountVolumes)
+	containerConfig, err := config.ParseContainerConfig(imageName, containerName, args, mountVolumes)
 	if err != nil {
 		logger.Error("Failed to parse container config: %v", err)
 		return err
@@ -40,6 +39,7 @@ func Run(args cli.Args, enableTTY, detached bool, containerName, memoryLimit, cp
 		logger.Error("Failed to new init process: %v", err)
 		return err
 	}
+	// todo: fix: 适配多容器cgroup
 	cg, err := SetupCGroup(initCmd.Process.Pid, memoryLimit, cpuLimit)
 	if err != nil {
 		logger.Error("Failed to setup cgroup: %v", err)
@@ -125,13 +125,13 @@ func NewInitProcess(enableTTY bool, containerConfig *config.ContainerConfig) (*e
 	initCmd.ExtraFiles = []*os.File{read}
 
 	// 挂载overlay，通过工作目录让子进程感知
-	err = filesys.CreateOverlayFS(BusyboxDir, MountPoint, BusyboxTarPath)
+	mountPoint, err := filesys.CreateOverlayFS(containerConfig)
 	if err != nil {
 		logger.Error("Failed to mount overlay: %v", err)
 		return nil, nil, err
 	}
 	// 修改子进程工作目录，子进程启动后就是
-	initCmd.Dir = MountPoint
+	initCmd.Dir = mountPoint
 
 	// 配置 Linux 命名空间隔离标志
 	initCmd.SysProcAttr = &syscall.SysProcAttr{
@@ -209,7 +209,7 @@ func cleanupResource(manager *cgroups.CGroupManager, containerConfig *config.Con
 		logger.Error("Failed to cleanup resource: %v", err)
 	}
 
-	if err := filesys.UmountOverlayFS(BusyboxDir, MountPoint); err != nil {
+	if err := filesys.UmountOverlayFS(containerConfig); err != nil {
 		logger.Error("Failed to umount overlayfs: %v", err)
 	}
 
