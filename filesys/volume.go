@@ -27,7 +27,8 @@ func MountVolume(rootfs string, mountConfigs []config.MountConfig) error {
 			return fmt.Errorf("failed to create mount point, mountPoint: %s, err: %w", mountPoint, err)
 		}
 		// bind 挂载
-		if err := syscall.Mount(mountConfig.Source, mountPoint, "none", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		if err := syscall.Mount(mountConfig.Source, mountPoint, "none", syscall.MS_BIND|syscall.MS_REC,
+			""); err != nil {
 			logger.Error("Failed to mount volume, err: %v", err)
 			return fmt.Errorf("failed to mount volume, mountPoint: %s, err: %w", mountPoint, err)
 		}

@@ -146,7 +146,8 @@ func MountPivotRoot(rootfs string) error {
 // 理论上还有/proc、/sys等应该需要运行时挂载并处理
 func MountTmpfs(rootfs string) error {
 	moutflags := syscall.MS_NOSUID | syscall.MS_STRICTATIME
-	if err := syscall.Mount("tmpfs", filepath.Join(rootfs, "dev"), "tmpfs", uintptr(moutflags), "mode=755"); err != nil {
+	if err := syscall.Mount("tmpfs", filepath.Join(rootfs, "dev"), "tmpfs", uintptr(moutflags),
+		"mode=755"); err != nil {
 		logger.Error("Failed to mount tmpfs, err: %v", err)
 		return err
 	}

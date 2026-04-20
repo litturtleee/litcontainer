@@ -56,6 +56,14 @@ var RunCommand = cli.Command{
 			Name:  "e",
 			Usage: "Set environment variables for the container, e.g., -e KEY=VALUE",
 		},
+		&cli.StringFlag{
+			Name:  "net",
+			Usage: "Assign a network to the container",
+		},
+		&cli.StringSliceFlag{
+			Name:  "p",
+			Usage: "Publish a container's port(s) to the host",
+		},
 	},
 	// 解析命令并执行
 	Action: func(c *cli.Context) error {
@@ -75,6 +83,8 @@ var RunCommand = cli.Command{
 		memoryLimit := c.String("m")
 		cpuLimit := c.String("cpus")
 		imageName := args[0]
+		network := c.String("net")
+		portMappings := c.StringSlice("p")
 
 		if enableTTY && detached {
 			logger.Error("it and d can not be used together")
@@ -93,7 +103,7 @@ var RunCommand = cli.Command{
 		// 调用container.Run
 		if err := container.Run(args[1:], enableTTY, detached,
 			imageName, containerName, memoryLimit, cpuLimit,
-			mountVolumes, envs, &wg); err != nil {
+			mountVolumes, envs, network, portMappings, &wg); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}

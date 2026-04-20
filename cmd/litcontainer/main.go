@@ -4,6 +4,7 @@ import (
 	"github.com/urfave/cli"
 	"litcontainer/commands"
 	"litcontainer/enum"
+	"litcontainer/pkg/db"
 	"litcontainer/pkg/logger"
 	"os"
 )
@@ -16,6 +17,11 @@ func init() {
 }
 
 func main() {
+	logger.Info("LitContainer start")
+	if !isInitOrExecContainer() {
+		InitBoltDB()
+	}
+
 	app := cli.NewApp()
 	app.Name = enum.AppName
 	app.Usage = enum.AppUsage
@@ -31,6 +37,7 @@ func main() {
 		commands.ExecContainerCommand,
 		commands.StopContainerCommand,
 		commands.RemoveContainerCommand,
+		commands.NetworkCommands,
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -39,4 +46,25 @@ func main() {
 
 	// 阻塞等待直到所有容器退出
 	commands.WaitAll()
+}
+
+func InitBoltDB() {
+	err := db.WithBoltDB(enum.DefaultNetworkDBPath, func(dbClient *db.BoltDB) error {
+		if bucketErr := dbClient.CreateBucketIfNotExists(enum.DefaultNetworkTable); bucketErr != nil {
+			return bucketErr
+		}
+		if bucketErr := dbClient.CreateBucketIfNotExists(enum.AllocatedIPKeyTable); bucketErr != nil {
+			return bucketErr
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Error("init bolt db failed: %v", err)
+		panic(err)
+	}
+}
+
+// 这两个是子进程避免重复加载DB
+func isInitOrExecContainer() bool {
+	return len(os.Args) > 1 && (os.Args[1] == "init" || os.Args[1] == "exec")
 }

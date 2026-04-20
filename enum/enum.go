@@ -7,4 +7,9 @@ const (
 
 	ContainerRunningState = "running"
 	ContainerStoppedState = "stopped"
+
+	DefaultNetworkDBPath = "/var/lib/litcontainer/network/files/local-kv.db"
+
+	DefaultNetworkTable = "litcontainer_network"
+	AllocatedIPKeyTable = "allocated_ip"
 )

@@ -2,6 +2,10 @@ package db
 
 import (
 	"fmt"
+	"litcontainer/pkg/logger"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -15,10 +19,25 @@ type BoltDB struct {
 const DefaultBoltDBClientName = "default"
 
 var BoltDBClients = make(map[string]*BoltDB)
+var lock sync.Mutex
+var shortConnLock sync.Mutex
 
 func InitBoltDBClients(clientName string, dbPath string) error {
+	lock.Lock()
+	defer lock.Unlock()
+	if _, ok := BoltDBClients[clientName]; ok {
+		logger.Debug("bolt db client %s already exists", clientName)
+		return nil
+	}
+
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create db dir %s failed: %w", dir, err)
+	}
+
 	db, err := NewBoltDB(dbPath)
 	if err != nil {
+		logger.Error("init blot db client %s failed: %v", clientName, err)
 		panic(err)
 	}
 	BoltDBClients[clientName] = db
@@ -37,12 +56,34 @@ func GetBoltDBClient(name string) *BoltDB {
 
 // NewBoltDB 创建一个新的BoltDB实例
 func NewBoltDB(dbPath string) (*BoltDB, error) {
-	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 1 * time.Second})
+	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 10 * time.Second})
 	if err != nil {
 		return nil, err
 	}
 
 	return &BoltDB{db: db}, nil
+}
+
+// WithBoltDB 使用短连接执行数据库操作
+func WithBoltDB(dbPath string, fn func(*BoltDB) error) error {
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create db dir %s failed: %w", dir, err)
+	}
+
+	shortConnLock.Lock()
+	boltDB, err := NewBoltDB(dbPath)
+	shortConnLock.Unlock()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := boltDB.Close(); closeErr != nil {
+			logger.Error("close bolt db failed: %v", closeErr)
+		}
+	}()
+
+	return fn(boltDB)
 }
 
 // Close 关闭数据库连接
@@ -202,5 +243,33 @@ func (b *BoltDB) ForEach(bucketName string, fn func(string, []byte) error) error
 			copy(value, v)
 			return fn(string(k), value)
 		})
+	})
+}
+
+// ClearBucket 清空指定bucket中的所有数据
+func (b *BoltDB) ClearBucket(bucketName string) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketName))
+		if bucket == nil {
+			// 如果bucket不存在，直接返回
+			return nil
+		}
+
+		// 获取所有键
+		var keysToDelete [][]byte
+		cursor := bucket.Cursor()
+		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+			keysToDelete = append(keysToDelete, make([]byte, len(k)))
+			copy(keysToDelete[len(keysToDelete)-1], k)
+		}
+
+		// 删除所有键值对
+		for _, key := range keysToDelete {
+			if err := bucket.Delete(key); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
 }

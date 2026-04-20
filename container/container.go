@@ -8,6 +8,7 @@ import (
 	"litcontainer/config"
 	"litcontainer/enum"
 	"litcontainer/filesys"
+	"litcontainer/network"
 	"litcontainer/pkg/logger"
 	"os"
 	"os/exec"
@@ -23,8 +24,14 @@ const (
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
 func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memoryLimit, cpuLimit string,
-	mountVolumes []string, envs []string, wg *sync.WaitGroup) error {
+	mountVolumes []string, envs []string, net string, portMappings []string, wg *sync.WaitGroup) error {
 	logger.Debug("container Run args: %v", args)
+
+	c, _ := config.GetContainerConfigByName(containerName)
+	if c != nil {
+		logger.Error("Container %s already exists", containerName)
+		return fmt.Errorf("container %s already exists", containerName)
+	}
 
 	// 解析容器配置信息
 	containerConfig, err := config.ParseContainerConfig(imageName, containerName, args, mountVolumes, envs)
@@ -33,6 +40,7 @@ func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memo
 		return err
 	}
 
+	// 启动子进程
 	initCmd, writePipe, err := NewInitProcess(enableTTY, containerConfig)
 	if err != nil {
 		logger.Error("Failed to new init process: %v", err)
@@ -45,15 +53,28 @@ func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memo
 		return err
 	}
 
-	// 配置信息落文件
+	// 获取子进程Pid
 	containerConfig.Pid = initCmd.Process.Pid
+
+	// 配置网络
+	if net != "" {
+		containerConfig.Network = net
+		containerConfig.PortMappings = portMappings
+		ip, err := network.Connect(net, containerConfig)
+		if err != nil {
+			logger.Error("Failed to connect network: %v", err)
+			return err
+		}
+		containerConfig.IpAddress = ip.String()
+	}
+	// 配置信息落文件
 	err = config.WriteContainerConfig(containerConfig)
 	if err != nil {
 		logger.Error("Failed to write container config: %v", err)
 		return err
 	}
 
-	// 将container配置通过管道发给子进程
+	// 将container配置通过管道发给子进程(子进程会等管道里的信息)
 	if err = SendInitConfig(writePipe, containerConfig); err != nil {
 		logger.Error("Failed to send init command: %v", err)
 		return err
@@ -213,6 +234,12 @@ func cleanupResource(manager *cgroups.CGroupManager, containerConfig *config.Con
 
 	if err := filesys.UmountOverlayFS(containerConfig); err != nil {
 		logger.Error("Failed to umount overlayfs: %v", err)
+	}
+
+	if containerConfig.Network != "" {
+		if err := network.Disconnect(containerConfig.Network, containerConfig); err != nil {
+			logger.Error("Failed to disconnect network: %v", err)
+		}
 	}
 
 	if err := config.UpdateContainerConfig(containerConfig.Id, enum.ContainerStoppedState); err != nil {

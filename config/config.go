@@ -22,16 +22,19 @@ const (
 )
 
 type ContainerConfig struct {
-	Id       string        `json:"id"`
-	Name     string        `json:"name"`
-	Image    string        `json:"image"`
-	Pid      int           `json:"pid"`
-	Command  []string      `json:"command"`
-	Envs     []string      `json:"envs"`
-	Mounts   []MountConfig `json:"mounts,omitempty"`
-	State    string        `json:"state"`
-	StartAt  string        `json:"startAt"`
-	UpdateAt string        `json:"updateAt"`
+	Id           string        `json:"id"`
+	Name         string        `json:"name"`
+	Image        string        `json:"image"`
+	Pid          int           `json:"pid"`
+	Network      string        `json:"network"`
+	IpAddress    string        `json:"ipAddress"`
+	PortMappings []string      `json:"portMappings"`
+	Command      []string      `json:"command"`
+	Envs         []string      `json:"envs"`
+	Mounts       []MountConfig `json:"mounts,omitempty"`
+	State        string        `json:"state"`
+	StartAt      string        `json:"startAt"`
+	UpdateAt     string        `json:"updateAt"`
 }
 
 type MountConfig struct {
@@ -91,9 +94,6 @@ func PrintContainersInfo() error {
 	if err != nil {
 		logger.Error("Failed to read container config, err: %v", err)
 		return err
-	}
-	if len(configs) == 0 {
-		return nil
 	}
 	// 格式化输出
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
@@ -201,6 +201,8 @@ func GetContainerConfigById(containerId string) (*ContainerConfig, error) {
 	logger.Debug("Container cannot be found when ID length is less than 12 characters")
 	return nil, nil
 }
+
+// --- 内部方法 ---
 
 func readAllContainerConfigs() ([]*ContainerConfig, error) {
 	if _, err := os.Stat(DefaultLitContainerDir); err != nil {
