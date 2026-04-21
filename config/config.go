@@ -202,6 +202,10 @@ func GetContainerConfigById(containerId string) (*ContainerConfig, error) {
 	return nil, nil
 }
 
+func GetAllConfig() ([]*ContainerConfig, error) {
+	return readAllContainerConfigs()
+}
+
 // --- 内部方法 ---
 
 func readAllContainerConfigs() ([]*ContainerConfig, error) {
