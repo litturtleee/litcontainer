@@ -145,10 +145,10 @@ func MountPivotRoot(rootfs string) error {
 // 使用 tmpfs 可以动态生成这些设备节点，并且是临时的，重启后不会保留。
 // 理论上还有/proc、/sys等应该需要运行时挂载并处理
 func MountTmpfs(rootfs string) error {
-	moutflags := syscall.MS_NOSUID | syscall.MS_STRICTATIME
-	if err := syscall.Mount("tmpfs", filepath.Join(rootfs, "dev"), "tmpfs", uintptr(moutflags),
+	moutflags := syscall.MS_RELATIME
+	if err := syscall.Mount("none", filepath.Join(rootfs, "dev"), "devtmpfs", uintptr(moutflags),
 		"mode=755"); err != nil {
-		logger.Error("Failed to mount tmpfs, err: %v", err)
+		logger.Error("Failed to mount devtmpfs , err: %v", err)
 		return err
 	}
 	// 处理/dev添加设备
