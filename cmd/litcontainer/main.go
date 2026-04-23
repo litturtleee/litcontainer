@@ -2,10 +2,11 @@ package main
 
 import (
 	"github.com/urfave/cli"
-	"litcontainer/commands"
-	"litcontainer/enum"
-	"litcontainer/pkg/db"
-	"litcontainer/pkg/logger"
+	commands2 "litcontainer/internal/cli/commands"
+	"litcontainer/internal/db"
+	"litcontainer/internal/logger"
+	"litcontainer/internal/network"
+	"litcontainer/internal/version"
 	"os"
 )
 
@@ -23,21 +24,21 @@ func main() {
 	}
 
 	app := cli.NewApp()
-	app.Name = enum.AppName
-	app.Usage = enum.AppUsage
-	app.Version = enum.AppVersion
+	app.Name = version.AppName
+	app.Usage = version.AppUsage
+	app.Version = version.AppVersion
 
 	app.Commands = []cli.Command{
-		commands.RunCommand,
-		commands.InitCommand,
-		commands.ExportCommand,
-		commands.PsCommand,
-		commands.LogCommand,
-		commands.ExecCommand,
-		commands.ExecContainerCommand,
-		commands.StopContainerCommand,
-		commands.RemoveContainerCommand,
-		commands.NetworkCommands,
+		commands2.RunCommand,
+		commands2.InitCommand,
+		commands2.ExportCommand,
+		commands2.PsCommand,
+		commands2.LogCommand,
+		commands2.ExecCommand,
+		commands2.ExecContainerCommand,
+		commands2.StopContainerCommand,
+		commands2.RemoveContainerCommand,
+		commands2.NetworkCommands,
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -45,15 +46,15 @@ func main() {
 	}
 
 	// 阻塞等待直到所有容器退出
-	commands.WaitAll()
+	commands2.WaitAll()
 }
 
 func InitBoltDB() {
-	err := db.WithBoltDB(enum.DefaultNetworkDBPath, func(dbClient *db.BoltDB) error {
-		if bucketErr := dbClient.CreateBucketIfNotExists(enum.DefaultNetworkTable); bucketErr != nil {
+	err := db.WithBoltDB(network.DefaultNetworkDBPath, func(dbClient *db.BoltDB) error {
+		if bucketErr := dbClient.CreateBucketIfNotExists(network.DefaultNetworkTable); bucketErr != nil {
 			return bucketErr
 		}
-		if bucketErr := dbClient.CreateBucketIfNotExists(enum.AllocatedIPKeyTable); bucketErr != nil {
+		if bucketErr := dbClient.CreateBucketIfNotExists(network.AllocatedIPKeyTable); bucketErr != nil {
 			return bucketErr
 		}
 		return nil

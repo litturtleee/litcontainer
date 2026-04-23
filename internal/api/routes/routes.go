@@ -5,8 +5,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"litcontainer/internal/api/handlers"
 	"litcontainer/internal/api/middleware"
-	"litcontainer/internal/service"
-	"litcontainer/pkg/logger"
+	"litcontainer/internal/auth"
+	"litcontainer/internal/logger"
 	"log"
 	"os"
 )
@@ -36,7 +36,7 @@ func SetupRoutes(r *gin.Engine) {
 	}
 
 	// 创建处理器
-	authService := service.NewAuthService(jwtSecret)
+	authService := auth.NewAuthService(jwtSecret)
 	authHandler := handlers.NewAuthHandler(authService)
 	// 认证相关路由（不需要认证）
 	auth := r.Group("/api/v1/auth")
