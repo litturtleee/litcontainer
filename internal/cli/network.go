@@ -1,9 +1,12 @@
-package commands
+package cli
 
 import (
 	"fmt"
 	"github.com/urfave/cli"
+	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
+	"os"
+	"text/tabwriter"
 )
 
 // docker network create --subnet <cidr> --driver <dirver> <name>
@@ -46,7 +49,7 @@ var NetworkCreateCommand = cli.Command{
 		if driverType == "" {
 			return fmt.Errorf("missing driver, %w", ErrInvalidArguments)
 		}
-		return network.CreateNetwork(name, driverType, subnet)
+		return network.GetController().Create(name, driverType, subnet)
 	},
 }
 
@@ -54,7 +57,19 @@ var NetworkListCommand = cli.Command{
 	Name:  "ls",
 	Usage: "list all networks",
 	Action: func(ctx *cli.Context) error {
-		network.ListNetworks()
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintf(w, "NAME\tIPRANGE\tDRIVER\n")
+		nws, err := network.GetController().List()
+		if err != nil {
+			return err
+		}
+		for _, nw := range nws {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", nw.Name, nw.IpRange, nw.Driver)
+		}
+		if err := w.Flush(); err != nil {
+			logger.Error("flush w failed: %v", err)
+			return err
+		}
 		return nil
 	},
 }
@@ -67,6 +82,6 @@ var NetworkRemoveCommand = cli.Command{
 		if name == "" {
 			return fmt.Errorf("missing network name, %w", ErrInvalidArguments)
 		}
-		return network.DeleteNetwork(name)
+		return network.GetController().Delete(name)
 	},
 }

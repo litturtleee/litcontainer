@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/urfave/cli"
-	commands2 "litcontainer/internal/cli/commands"
+	cli2 "litcontainer/internal/cli"
 	"litcontainer/internal/db"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
@@ -23,30 +23,31 @@ func main() {
 		InitBoltDB()
 	}
 
+	if err := network.Init(network.DefaultNetworkDBPath); err != nil {
+		panic(err)
+	}
+
 	app := cli.NewApp()
 	app.Name = version.AppName
 	app.Usage = version.AppUsage
 	app.Version = version.AppVersion
 
 	app.Commands = []cli.Command{
-		commands2.RunCommand,
-		commands2.InitCommand,
-		commands2.ExportCommand,
-		commands2.PsCommand,
-		commands2.LogCommand,
-		commands2.ExecCommand,
-		commands2.ExecContainerCommand,
-		commands2.StopContainerCommand,
-		commands2.RemoveContainerCommand,
-		commands2.NetworkCommands,
+		cli2.RunCommand,
+		cli2.InitCommand,
+		cli2.ExportCommand,
+		cli2.PsCommand,
+		cli2.LogCommand,
+		cli2.ExecCommand,
+		cli2.ExecContainerCommand,
+		cli2.StopContainerCommand,
+		cli2.RemoveContainerCommand,
+		cli2.NetworkCommands,
 	}
 
 	if err := app.Run(os.Args); err != nil {
 		logger.Error("App run Error: %v", err)
 	}
-
-	// 阻塞等待直到所有容器退出
-	commands2.WaitAll()
 }
 
 func InitBoltDB() {

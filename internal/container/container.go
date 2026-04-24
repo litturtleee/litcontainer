@@ -3,7 +3,6 @@ package container
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/urfave/cli"
 	"litcontainer/internal/cgroups"
 	"litcontainer/internal/filesys"
 	"litcontainer/internal/logger"
@@ -13,7 +12,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 )
 
@@ -22,8 +20,8 @@ const (
 )
 
 // Run 启动容器并在隔离的命名空间中执行用户命令
-func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memoryLimit, cpuLimit string,
-	mountVolumes []string, envs []string, net string, portMappings []string, wg *sync.WaitGroup) error {
+func Run(args []string, enableTTY, detached bool, imageName, containerName, memoryLimit, cpuLimit string, envs []string,
+	net string, mounts []filesys.MountConfig, portMappings []string) error {
 	logger.Debug("container Run args: %v", args)
 
 	c, _ := GetContainerConfigByName(containerName)
@@ -33,11 +31,7 @@ func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memo
 	}
 
 	// 解析容器配置信息
-	containerConfig, err := ParseContainerConfig(imageName, containerName, args, mountVolumes, envs)
-	if err != nil {
-		logger.Error("Failed to parse container serverconfig: %v", err)
-		return err
-	}
+	containerConfig := NewContainerConfig(containerName, imageName, args, envs, mounts)
 
 	// 启动子进程
 	initCmd, writePipe, err := NewInitProcess(enableTTY, containerConfig)
@@ -65,7 +59,7 @@ func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memo
 			IPAddress:    containerConfig.IpAddress,
 			PortMappings: containerConfig.PortMappings,
 		}
-		ip, err := network.Connect(net, epCfg)
+		ip, err := network.GetController().Connect(net, epCfg)
 		if err != nil {
 			logger.Error("Failed to connect network: %v", err)
 			return err
@@ -100,9 +94,7 @@ func Run(args cli.Args, enableTTY, detached bool, imageName, containerName, memo
 	// todo: 由shim进程监控
 	if detached {
 		logger.Info("Container started in background with PID:%v", initCmd.Process.Pid)
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			// 清理资源
 			defer cleanupResource(cg, containerConfig)
 			waitErr := initCmd.Wait()
@@ -248,7 +240,7 @@ func cleanupResource(manager *cgroups.CGroupManager, containerConfig *Config) {
 			Pid:          containerConfig.Pid,
 			PortMappings: containerConfig.PortMappings,
 		}
-		if err := network.Disconnect(containerConfig.Network, epCfg); err != nil {
+		if err := network.GetController().Disconnect(containerConfig.Network, epCfg); err != nil {
 			logger.Error("Failed to disconnect network: %v", err)
 		}
 	}

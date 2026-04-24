@@ -1,16 +1,16 @@
-package commands
+package cli
 
 import (
 	"errors"
 	"fmt"
 	"github.com/urfave/cli"
-	container2 "litcontainer/internal/container"
+	"litcontainer/internal/container"
 	"litcontainer/internal/image"
 	"litcontainer/internal/logger"
-	"sync"
+	"os"
+	"strings"
+	"text/tabwriter"
 )
-
-var wg sync.WaitGroup
 
 var InitCommand = cli.Command{
 	Name:   "init",
@@ -18,7 +18,7 @@ var InitCommand = cli.Command{
 	Hidden: true,
 	Action: func(c *cli.Context) error {
 		logger.Debug("init command, args: %v", c.Args())
-		return container2.InitContainerProcess()
+		return container.InitContainerProcess()
 	},
 }
 
@@ -95,14 +95,20 @@ var RunCommand = cli.Command{
 			return fmt.Errorf("container name can not be empty, %w", ErrInvalidArguments)
 		}
 
+		mounts, err := parseMountVolume(mountVolumes)
+		if err != nil {
+			logger.Error("parse mount volume error: %v", err)
+			return err
+		}
+
 		logger.Debug(
 			"enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s, detached: %s, imageName: %s, containerName: %s",
 			enableTTY, memoryLimit, cpuLimit, mountVolumes, detached, imageName, containerName,
 		)
 		// 调用container.Run
-		if err := container2.Run(args[1:], enableTTY, detached,
-			imageName, containerName, memoryLimit, cpuLimit,
-			mountVolumes, envs, network, portMappings, &wg); err != nil {
+		if err := container.Run(args[1:], enableTTY, detached,
+			imageName, containerName, memoryLimit, cpuLimit, envs,
+			network, mounts, portMappings); err != nil {
 			logger.Error("run command error: %v", err)
 			return err
 		}
@@ -141,7 +147,7 @@ var PsCommand = cli.Command{
 	Name:  "ps",
 	Usage: "List all running containers",
 	Action: func(c *cli.Context) error {
-		if err := container2.PrintContainersInfo(); err != nil {
+		if err := PrintContainersInfo(); err != nil {
 			logger.Error("ps command error: %v", err)
 			return err
 		}
@@ -165,7 +171,7 @@ var LogCommand = cli.Command{
 			return fmt.Errorf("container id is invalid, %w", ErrInvalidArguments)
 		}
 		follow := c.Bool("f")
-		if err := container2.PrintContainerLog(containerID, follow); err != nil {
+		if err := container.PrintContainerLog(containerID, follow); err != nil {
 			logger.Error("log command error: %v", err)
 			return err
 		}
@@ -184,13 +190,14 @@ var ExecCommand = cli.Command{
 	},
 	Action: func(c *cli.Context) error {
 		if len(c.Args()) < 2 {
-			return fmt.Errorf("usage: litcontainer exec [-it] <name> <command> [args...], %w", ErrInvalidArguments)
+			return fmt.Errorf("usage: litcontainer exec [-it] <name> <command> [args...], %w",
+				ErrInvalidArguments)
 		}
 		enableTTY := c.Bool("it")
 		containerName := c.Args().Get(0)
 		args := c.Args()[1:]
 
-		if err := container2.Exec(enableTTY, containerName, args); err != nil {
+		if err := container.Exec(enableTTY, containerName, args); err != nil {
 			logger.Error("exec command error: %v", err)
 			return err
 		}
@@ -203,7 +210,7 @@ var ExecContainerCommand = cli.Command{
 	Usage:  "Execute a command in a running container, Do not call it outside",
 	Hidden: true,
 	Action: func(c *cli.Context) error {
-		if err := container2.ExecContainer(c.Args()); err != nil {
+		if err := container.ExecContainer(c.Args()); err != nil {
 			logger.Error("exec-container command error: %v", err)
 			return err
 		}
@@ -224,7 +231,7 @@ var StopContainerCommand = cli.Command{
 			logger.Error("container name cannot be empty")
 			return fmt.Errorf("container name cannot be empty, %w", ErrInvalidArguments)
 		}
-		if err := container2.StopContainer(containerIdOrName); err != nil {
+		if err := container.StopContainer(containerIdOrName); err != nil {
 			logger.Error("stop command error: %v", err)
 			return err
 		}
@@ -252,7 +259,7 @@ var RemoveContainerCommand = cli.Command{
 			logger.Error("container name cannot be empty")
 			return fmt.Errorf("container name cannot be empty, %w", ErrInvalidArguments)
 		}
-		if err := container2.RemoveContainer(containerIdOrName, force); err != nil {
+		if err := container.RemoveContainer(containerIdOrName, force); err != nil {
 			logger.Error("remove command error: %v", err)
 			return err
 		}
@@ -260,6 +267,30 @@ var RemoveContainerCommand = cli.Command{
 	},
 }
 
-func WaitAll() {
-	wg.Wait()
+// PrintContainersInfo 输出所有容器信息
+func PrintContainersInfo() error {
+	configs, err := container.GetAllConfig()
+	if err != nil {
+		logger.Error("Failed to read container serverconfig, err: %v", err)
+		return err
+	}
+	// 格式化输出
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "ID\tNAME\tPID\tCOMMAND\tSTATE\tSTARTED_AT\tUPDATED_AT")
+	for _, config := range configs {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			config.ID[:12],
+			config.Name,
+			config.Pid,
+			strings.Join(config.Command, " "),
+			config.State,
+			config.StartAt,
+			config.UpdateAt,
+		)
+	}
+	if err := w.Flush(); err != nil {
+		logger.Error("Failed to flush container info, err: %v", err)
+		return err
+	}
+	return nil
 }
