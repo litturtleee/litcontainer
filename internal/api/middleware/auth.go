@@ -4,14 +4,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"litcontainer/internal/api/errdefs"
 	"litcontainer/internal/api/types"
-	"litcontainer/internal/model"
-	"litcontainer/internal/service"
-	"litcontainer/pkg/logger"
+	"litcontainer/internal/auth"
+	"litcontainer/internal/logger"
 	"net/http"
 	"strings"
 )
 
-func AuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
+func AuthMiddleware(authService *auth.AuthService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 获取认证信息
 		authHeader := c.GetHeader("Authorization")
@@ -23,7 +22,7 @@ func AuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
 			return
 		}
 
-		var authContext *model.AuthContext
+		var authContext *auth.AuthContext
 		var err error
 
 		// 解析认证头
@@ -51,7 +50,7 @@ func AuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
 	}
 }
 
-func PermissionMiddleware(authService *service.AuthService, resource, action string) gin.HandlerFunc {
+func PermissionMiddleware(authService *auth.AuthService, resource, action string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authContext, exists := c.Get("auth_context")
 		logger.Debug("auth_context: %v", authContext)
@@ -63,7 +62,7 @@ func PermissionMiddleware(authService *service.AuthService, resource, action str
 			return
 		}
 
-		ctx, ok := authContext.(*model.AuthContext)
+		ctx, ok := authContext.(*auth.AuthContext)
 		if !ok {
 			logger.Error("Invalid authentication context")
 			c.JSON(http.StatusUnauthorized, types.Error(errdefs.ErrUnauthorized, "Invalid authentication context", ""))

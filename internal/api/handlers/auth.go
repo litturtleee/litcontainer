@@ -4,18 +4,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"litcontainer/internal/api/errdefs"
 	"litcontainer/internal/api/types"
-	"litcontainer/internal/model"
-	"litcontainer/internal/service"
-	"litcontainer/pkg/logger"
+	"litcontainer/internal/auth"
+	"litcontainer/internal/logger"
 	"net/http"
 	"strings"
 )
 
 type AuthHandler struct {
-	service *service.AuthService
+	service *auth.AuthService
 }
 
-func NewAuthHandler(service *service.AuthService) *AuthHandler {
+func NewAuthHandler(service *auth.AuthService) *AuthHandler {
 	return &AuthHandler{
 		service: service,
 	}
@@ -23,7 +22,7 @@ func NewAuthHandler(service *service.AuthService) *AuthHandler {
 
 // Login 用户登录
 func (h *AuthHandler) Login(c *gin.Context) {
-	var req model.LoginRequest
+	var req auth.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Error("Login request parameter binding failed: %v", err)
 		c.JSON(http.StatusBadRequest,
@@ -43,7 +42,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 // Register 用户注册
 func (h *AuthHandler) Register(c *gin.Context) {
-	var req model.CreateUserRequest
+	var req auth.CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Error("Registration request parameter binding failed: %v", err)
 		c.JSON(http.StatusBadRequest,
@@ -71,7 +70,7 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 		return
 	}
 
-	ctx, ok := authContext.(*model.AuthContext)
+	ctx, ok := authContext.(*auth.AuthContext)
 	if !ok {
 		logger.Error("The authentication context is invalid")
 		c.JSON(http.StatusUnauthorized,
