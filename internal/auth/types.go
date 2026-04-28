@@ -12,10 +12,10 @@ type UserBase struct {
 	Email       string            `json:"email"`
 	Roles       []string          `json:"roles"`
 	Permissions []string          `json:"permissions"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
-	LastLoginAt *time.Time        `json:"last_login_at,omitempty"`
-	IsActive    bool              `json:"is_active"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
+	LastLoginAt *time.Time        `json:"lastLoginAt,omitempty"`
+	IsActive    bool              `json:"isActive"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
@@ -30,7 +30,7 @@ type Role struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	Permissions []string  `json:"permissions"`
-	CreatedAt   time.Time `json:"created_at"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // Permission 权限信息
@@ -40,7 +40,7 @@ type Permission struct {
 	Description string    `json:"description"`
 	Resource    string    `json:"resource"`
 	Action      string    `json:"action"`
-	CreatedAt   time.Time `json:"created_at"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // LoginRequest 登录请求
@@ -66,7 +66,7 @@ type CreateUserRequest struct {
 
 // AuthContext 认证上下文
 type AuthContext struct {
-	UserID      string   `json:"user_id"`
+	UserID      string   `json:"userId"`
 	Username    string   `json:"username"`
 	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
@@ -79,9 +79,9 @@ func (u *User) MarshalJSON() ([]byte, error) {
 	type Alias User
 	return json.Marshal(&struct {
 		*Alias
-		CreatedAt   string  `json:"created_at"`
-		UpdatedAt   string  `json:"updated_at"`
-		LastLoginAt *string `json:"last_login_at,omitempty"`
+		CreatedAt   string  `json:"createdAt"`
+		UpdatedAt   string  `json:"updatedAt"`
+		LastLoginAt *string `json:"lastLoginAt,omitempty"`
 	}{
 		Alias:       (*Alias)(u),
 		CreatedAt:   u.CreatedAt.Format(time.RFC3339),

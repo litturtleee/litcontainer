@@ -30,6 +30,16 @@ func Init(dbPath string) error {
 	if err != nil {
 		return err
 	}
+	err = c.db.CreateBucketIfNotExists(DefaultNetworkTable)
+	if err != nil {
+		logger.Error("init bolt db failed: %v", err)
+		return err
+	}
+	err = c.db.CreateBucketIfNotExists(AllocatedIPKeyTable)
+	if err != nil {
+		logger.Error("init bolt db failed: %v", err)
+		return err
+	}
 	defaultController = c
 	return nil
 }
@@ -112,12 +122,6 @@ func (c *Controller) Delete(name string) error {
 		logger.Error("network %s not found", name)
 		return ErrNetworkNotFound
 	}
-	// 释放ip
-	err = c.releaseIP(nw.IpRange, nw.IpRange.IP)
-	if err != nil {
-		logger.Error("release ip failed: %v", err)
-		return err
-	}
 
 	driver, err := GetDriver(nw.Driver)
 	if err != nil {
@@ -130,7 +134,13 @@ func (c *Controller) Delete(name string) error {
 		return err
 	}
 
-	return c.db.Delete(DefaultNetworkTable, name)
+	err = c.db.Delete(DefaultNetworkTable, name)
+	if err != nil {
+		logger.Error("delete network %s failed: %v", name, err)
+		return err
+	}
+	_, cidrNet, _ := net.ParseCIDR(nw.IpRange.String())
+	return c.db.Delete(AllocatedIPKeyTable, cidrNet.String())
 }
 func (c *Controller) List() ([]*Network, error) {
 	datas, err := c.db.GetAll(DefaultNetworkTable)
@@ -160,7 +170,7 @@ func (c *Controller) Get(name string) (*Network, error) {
 		return nil, err
 	}
 	if jsonStr == nil {
-		logger.Warn("network %s not found", name)
+		logger.Debug("network %s not found", name)
 		return nil, nil
 	}
 	var network Network

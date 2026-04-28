@@ -22,19 +22,28 @@ type Config struct {
 	Envs         []string              `json:"envs"`
 	Mounts       []filesys.MountConfig `json:"mounts,omitempty"`
 	State        string                `json:"state"`
-	StartAt      string                `json:"startAt"`
+	TTY          bool                  `json:"tty"`
+	CPULimit     string                `json:"cpuLimit"`
+	MemoryLimit  string                `json:"memoryLimit"`
+	CreatedAt    string                `json:"createdAt"`
 	UpdateAt     string                `json:"updateAt"`
 }
 
-func NewContainerConfig(name, image string, cmd, envs []string, mounts []filesys.MountConfig) *Config {
+func NewContainerConfig(name, image, cpuLimit, memoryLimit, network string, cmd, envs, portMapping []string,
+	mounts []filesys.MountConfig, enableTTY bool) *Config {
 	return &Config{
-		ID:      generateRandomContainerID(),
-		Name:    name,
-		Image:   image,
-		State:   RunningState,
-		StartAt: time.Now().Format(time.DateTime),
-		Command: cmd,
-		Envs:    envs,
-		Mounts:  mounts,
+		ID:           generateRandomContainerID(),
+		Name:         name,
+		Image:        image,
+		State:        CreatedState,
+		CreatedAt:    time.Now().Format(time.DateTime),
+		Command:      cmd,
+		Envs:         envs,
+		Mounts:       mounts,
+		TTY:          enableTTY,
+		CPULimit:     cpuLimit,
+		MemoryLimit:  memoryLimit,
+		Network:      network,
+		PortMappings: portMapping,
 	}
 }

@@ -15,7 +15,7 @@ const (
 )
 
 // CreateOverlayFS 基于busybox镜像创建 overlay 文件系统
-func CreateOverlayFS(image, containerID string) (string, error) {
+func CreateOverlayFS(image, containerID string) error {
 	imageTarPath := "/var/local/" + image + ".tar"
 	imageDir := filepath.Join(DefaultImageDir, image)
 	mountPointDir := filepath.Join(DefaultOverlayFsDir, containerID)
@@ -26,13 +26,13 @@ func CreateOverlayFS(image, containerID string) (string, error) {
 		logger.Debug("start to untar %s.tar, tarPath: %v", image, imageTarPath)
 		if err := os.MkdirAll(imageDir, 0755); err != nil {
 			logger.Error("Error creating %s directory: %v", image, err)
-			return "", err
+			return err
 		}
 
 		output, err := exec.Command("tar", "-xvf", imageTarPath, "-C", imageDir).CombinedOutput()
 		if err != nil {
 			logger.Error("failed to extract %s: err %v output %s", imageTarPath, err, string(output))
-			return "", err
+			return err
 		}
 	}
 
@@ -44,25 +44,25 @@ func CreateOverlayFS(image, containerID string) (string, error) {
 
 	if err := os.MkdirAll(upperDir, 0755); err != nil {
 		logger.Error("Error creating %s directory: %v", upperDir, err)
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		logger.Error("Error creating %s directory: %v", workDir, err)
-		return "", err
+		return err
 	}
 	if err := os.MkdirAll(mergeDir, 0755); err != nil {
 		logger.Error("Error creating %s directory: %v", mergeDir, err)
-		return "", err
+		return err
 	}
 
 	// 3.使用overlayFS挂载
 	err := MountOverlayFS(lowerDir, upperDir, workDir, mergeDir)
 	if err != nil {
 		logger.Error("Error mounting overlayfs: %v", err)
-		return "", err
+		return err
 	}
 
-	return mergeDir, nil
+	return nil
 }
 
 func MountOverlayFS(lowerDir, upperDir, workDir, mountPoint string) error {
@@ -102,11 +102,19 @@ func UmountOverlayFS(containerID string) error {
 		}
 	}
 
-	// 删除mountPointDir 下面有upper、work、merged目录
+	logger.Debug("Umount overlayfs success, mountPoint: %v", mountPoint)
+	return nil
+}
+
+func GetMountPoint(containerID string) string {
+	return filepath.Join(DefaultOverlayFsDir, containerID)
+}
+
+// RemoveOverlayFS 删除 overlay 文件系统
+func RemoveOverlayFS(containerID string) error {
+	mountPointDir := filepath.Join(DefaultOverlayFsDir, containerID)
 	if err := os.RemoveAll(mountPointDir); err != nil {
 		logger.Warn("Failed to remove mountPoint directory [%v]: %v", mountPointDir, err)
 	}
-
-	logger.Debug("Umount overlayfs success, mountPoint: %v", mountPoint)
 	return nil
 }

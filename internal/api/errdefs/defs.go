@@ -1,8 +1,11 @@
 package errdefs
 
-// 服务端错误
+// 通用错误码
 const (
 	ErrInternalServerError = "ErrInternalServerError"
+
+	// 参数错误
+	ErrInvalidParameter = "ErrInvalidParameter"
 )
 
 // 容器相关错误码
@@ -11,6 +14,12 @@ const (
 	ErrInvalidContainerID = "ErrInvalidContainerID"
 	// 容器不存在
 	ErrContainerNotFound = "ErrContainerNotFound"
+
+	// 容器已启动
+	ErrContainerIsRunning = "ErrContainerIsRunning"
+
+	// 容器已停止
+	ErrContainerNotRunning = "ErrContainerNotRunning"
 
 	// 容器已存在（创建时冲突）
 	ErrContainerExists = "ErrContainerExists"
@@ -32,6 +41,9 @@ const (
 
 	// 容器操作超时（如启动超时、健康检查超时）
 	ErrContainerTimeout = "ErrContainerTimeout"
+
+	// 参数无效
+	ErrInitInvalidArgs = "ErrInitInvalidArgs"
 )
 
 // 镜像相关错误码
@@ -81,9 +93,6 @@ const (
 
 // 登录鉴权相关错误码
 const (
-	// 参数错误
-	ErrInvalidParameter = "ErrInvalidParameter"
-
 	// 登录失败
 	ErrLoginFailed = "ErrLoginFailed"
 
