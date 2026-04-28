@@ -1,4 +1,4 @@
-package serverconfig
+package daemon
 
 import (
 	"gopkg.in/yaml.v3"

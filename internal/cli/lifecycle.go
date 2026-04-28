@@ -1,26 +1,14 @@
 package cli
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
 	"github.com/urfave/cli"
+	"litcontainer/internal/api/types"
+	"litcontainer/internal/client"
 	"litcontainer/internal/container"
-	"litcontainer/internal/image"
 	"litcontainer/internal/logger"
-	"os"
-	"strings"
-	"text/tabwriter"
 )
-
-var InitCommand = cli.Command{
-	Name:   "init",
-	Usage:  "Init container process run user's process in container. Do not call it outside",
-	Hidden: true,
-	Action: func(c *cli.Context) error {
-		logger.Debug("init command, args: %v", c.Args())
-		return container.InitContainerProcess()
-	},
-}
 
 var RunCommand = cli.Command{
 	Name:  "run",
@@ -71,10 +59,11 @@ var RunCommand = cli.Command{
 		logger.Debug("run command args: %v.", args)
 		if len(args) < 2 {
 			logger.Error("run command need at least two argument")
-			return fmt.Errorf("run command neeed at least two argument, %w", ErrInvalidArguments)
+			return fmt.Errorf("run command neeed at least two argument, %w", client.ErrInvalidArguments)
 		}
 		// 获取参数
 		enableTTY := c.Bool("it")
+		// todo:detach参数没有处理
 		detached := c.Bool("d")
 		mountVolumes := c.StringSlice("v")
 		envs := c.StringSlice("e")
@@ -87,12 +76,12 @@ var RunCommand = cli.Command{
 
 		if enableTTY && detached {
 			logger.Error("it and d can not be used together")
-			return fmt.Errorf("it and d can not be used together, %w", ErrInvalidArguments)
+			return fmt.Errorf("it and d can not be used together, %w", client.ErrInvalidArguments)
 		}
 
 		if containerName == "" {
 			logger.Error("container name can not be empty")
-			return fmt.Errorf("container name can not be empty, %w", ErrInvalidArguments)
+			return fmt.Errorf("container name can not be empty, %w", client.ErrInvalidArguments)
 		}
 
 		mounts, err := parseMountVolume(mountVolumes)
@@ -102,53 +91,54 @@ var RunCommand = cli.Command{
 		}
 
 		logger.Debug(
-			"enableTTY %s, memory limit: %s, cpu limit: %s, mountVolumes: %s, detached: %s, imageName: %s, containerName: %s",
+			"enableTTY %v, memory limit: %s, cpu limit: %s, mountVolumes: %s, detached: %v, imageName: %s, containerName: %s",
 			enableTTY, memoryLimit, cpuLimit, mountVolumes, detached, imageName, containerName,
 		)
 		// 调用container.Run
-		if err := container.Run(args[1:], enableTTY, detached,
-			imageName, containerName, memoryLimit, cpuLimit, envs,
-			network, mounts, portMappings); err != nil {
-			logger.Error("run command error: %v", err)
+		cli := client.NewClient()
+		id, err := cli.ContainerCreate(types.ContainerCreateRequest{
+			Name:         containerName,
+			Image:        imageName,
+			Command:      args[1:],
+			Env:          envs,
+			Mounts:       mounts,
+			CPULimit:     cpuLimit,
+			MemoryLimit:  memoryLimit,
+			Network:      network,
+			PortMappings: portMappings,
+			TTY:          enableTTY,
+		})
+		if err != nil {
 			return err
 		}
-		return nil
-	},
-}
-
-var ExportCommand = cli.Command{
-	Name:  "export",
-	Usage: "Package the current running container into a tar file (docker export -o <tarfile> <imageName>)",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name:  "o",
-			Usage: "Output file name for the tar file",
-		},
-	},
-	Action: func(c *cli.Context) error {
-		if len(c.Args()) == 0 {
-			logger.Error("Usage: tinydocker export [-o <tarfile>] <containerName>")
-			return errors.New("Usage: tinydocker export [-o <tarfile>]  <containerName>")
-		}
-		containerName := c.Args().Get(0)
-		output := c.String("o")
-		if output == "" {
-			output = "container"
-		}
-		if err := image.Export(containerName, output); err != nil {
-			logger.Error("export command error: %v", err)
+		err = cli.StartContainer(id)
+		if err != nil {
 			return err
 		}
+		if detached {
+			fmt.Println(id)
+			return nil
+		}
+		if err := cli.WaitContainer(id); err != nil {
+			return err
+		}
+		logs, _ := cli.LogsContainer(id)
+		fmt.Println(string(logs))
 		return nil
 	},
 }
 
 var PsCommand = cli.Command{
 	Name:  "ps",
-	Usage: "List all running containers",
+	Usage: "List all containers",
 	Action: func(c *cli.Context) error {
-		if err := PrintContainersInfo(); err != nil {
-			logger.Error("ps command error: %v", err)
+		cli := client.NewClient()
+		containers, err := cli.ListContainers()
+		if err != nil {
+			return err
+		}
+		err = printContainersInfo(containers)
+		if err != nil {
 			return err
 		}
 		return nil
@@ -165,20 +155,25 @@ var LogCommand = cli.Command{
 		},
 	},
 	Action: func(c *cli.Context) error {
-		containerID := c.Args().First()
-		if len(containerID) < 12 {
-			logger.Error("container id is invalid")
-			return fmt.Errorf("container id is invalid, %w", ErrInvalidArguments)
-		}
+		containerIDOrName := c.Args().First()
+
 		follow := c.Bool("f")
-		if err := container.PrintContainerLog(containerID, follow); err != nil {
-			logger.Error("log command error: %v", err)
+
+		if follow {
+			return fmt.Errorf("follow not support now")
+		}
+
+		cli := client.NewClient()
+		logs, err := cli.LogsContainer(containerIDOrName)
+		if err != nil {
 			return err
 		}
+		fmt.Println(string(logs))
 		return nil
 	},
 }
 
+// todo:没改
 var ExecCommand = cli.Command{
 	Name:  "exec",
 	Usage: "Execute a command in a running container",
@@ -191,7 +186,7 @@ var ExecCommand = cli.Command{
 	Action: func(c *cli.Context) error {
 		if len(c.Args()) < 2 {
 			return fmt.Errorf("usage: litcontainer exec [-it] <name> <command> [args...], %w",
-				ErrInvalidArguments)
+				client.ErrInvalidArguments)
 		}
 		enableTTY := c.Bool("it")
 		containerName := c.Args().Get(0)
@@ -205,6 +200,7 @@ var ExecCommand = cli.Command{
 	},
 }
 
+// todo:没改
 var ExecContainerCommand = cli.Command{
 	Name:   "exec-container",
 	Usage:  "Execute a command in a running container, Do not call it outside",
@@ -221,21 +217,27 @@ var ExecContainerCommand = cli.Command{
 var StopContainerCommand = cli.Command{
 	Name:  "stop",
 	Usage: "Stop a running container",
+	Flags: []cli.Flag{
+		&cli.IntFlag{
+			Name:  "t",
+			Usage: "Timeout in seconds",
+			Value: 10,
+		},
+	},
 	Action: func(c *cli.Context) error {
 		if c.NArg() == 0 {
 			logger.Error("at least one container name or ID must be specified")
-			return fmt.Errorf("at least one container name or ID must be specified, %w", ErrInvalidArguments)
+			return fmt.Errorf("at least one container name or ID must be specified, %w", client.ErrInvalidArguments)
 		}
 		containerIdOrName := c.Args().First()
 		if len(containerIdOrName) == 0 {
 			logger.Error("container name cannot be empty")
-			return fmt.Errorf("container name cannot be empty, %w", ErrInvalidArguments)
+			return fmt.Errorf("container name cannot be empty, %w", client.ErrInvalidArguments)
 		}
-		if err := container.StopContainer(containerIdOrName); err != nil {
-			logger.Error("stop command error: %v", err)
-			return err
-		}
-		return nil
+		timeout := c.Int("t")
+
+		cli := client.NewClient()
+		return cli.StopContainer(containerIdOrName, timeout)
 	},
 }
 
@@ -251,46 +253,40 @@ var RemoveContainerCommand = cli.Command{
 	Action: func(c *cli.Context) error {
 		if c.NArg() == 0 {
 			logger.Error("at least one container name or ID must be specified")
-			return fmt.Errorf("at least one container name or ID must be specified, %w", ErrInvalidArguments)
+			return fmt.Errorf("at least one container name or ID must be specified, %w", client.ErrInvalidArguments)
 		}
 		force := c.Bool("f")
 		containerIdOrName := c.Args().First()
 		if len(containerIdOrName) == 0 {
 			logger.Error("container name cannot be empty")
-			return fmt.Errorf("container name cannot be empty, %w", ErrInvalidArguments)
+			return fmt.Errorf("container name cannot be empty, %w", client.ErrInvalidArguments)
 		}
-		if err := container.RemoveContainer(containerIdOrName, force); err != nil {
-			logger.Error("remove command error: %v", err)
-			return err
-		}
-		return nil
+
+		cli := client.NewClient()
+		return cli.RemoveContainer(containerIdOrName, force)
 	},
 }
 
-// PrintContainersInfo 输出所有容器信息
-func PrintContainersInfo() error {
-	configs, err := container.GetAllConfig()
-	if err != nil {
-		logger.Error("Failed to read container serverconfig, err: %v", err)
-		return err
-	}
-	// 格式化输出
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tPID\tCOMMAND\tSTATE\tSTARTED_AT\tUPDATED_AT")
-	for _, config := range configs {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
-			config.ID[:12],
-			config.Name,
-			config.Pid,
-			strings.Join(config.Command, " "),
-			config.State,
-			config.StartAt,
-			config.UpdateAt,
-		)
-	}
-	if err := w.Flush(); err != nil {
-		logger.Error("Failed to flush container info, err: %v", err)
-		return err
-	}
-	return nil
+var InspectContainerCommand = cli.Command{
+	Name:  "inspect",
+	Usage: "Inspect a container",
+	Action: func(c *cli.Context) error {
+		if c.NArg() == 0 {
+			logger.Error("at least one container name or ID must be specified")
+			return fmt.Errorf("at least one container name or ID must be specified, %w", client.ErrInvalidArguments)
+		}
+		containerIdOrName := c.Args().First()
+		if len(containerIdOrName) == 0 {
+			logger.Error("container name cannot be empty")
+			return fmt.Errorf("container name cannot be empty, %w", client.ErrInvalidArguments)
+		}
+		cli := client.NewClient()
+		inspectContainer, err := cli.InspectContainer(containerIdOrName)
+		if err != nil {
+			return err
+		}
+		configByte, _ := json.Marshal(inspectContainer)
+		fmt.Println(string(configByte))
+		return nil
+	},
 }

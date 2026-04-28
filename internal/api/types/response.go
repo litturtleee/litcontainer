@@ -25,6 +25,26 @@ type APIError struct {
 	Details string `json:"details,omitempty"`
 }
 
+type CreateContainerResp struct {
+	ID string `json:"id"`
+}
+
+type StartContainerResp struct {
+	ID string `json:"id"`
+}
+
+type StopContainerResp struct {
+	ID string `json:"id"`
+}
+
+type KillContainerResp struct {
+	ID string `json:"id"`
+}
+
+type WaitContainerResp struct {
+	ID string `json:"id"`
+}
+
 func Success(apiVersion string, data interface{}, pagination *Pagination) *APIResponse {
 	return &APIResponse{
 		Success:    true,

@@ -52,7 +52,7 @@ func GetContainerConfigByName(name string) (*Config, error) {
 			return config, nil
 		}
 	}
-	return nil, fmt.Errorf("container %s does not exist", name)
+	return nil, fmt.Errorf("container %s does not exist, %w", name, ErrContainerNotFound)
 }
 
 // GetContainerConfigById 获取容器配置

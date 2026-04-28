@@ -11,6 +11,8 @@ import (
 )
 
 func InitContainerProcess() error {
+	fmt.Fprintln(os.Stderr, "[init] enter") // 直接写 stderr，绕过 logger 层
+
 	// 管道内读取命令(阻塞式)
 	// fd0-stdin
 	// fd1-stdout

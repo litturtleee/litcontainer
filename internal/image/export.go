@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 )
 
-func Export(containerName, output string) error {
-	logger.Debug("starting export, containerName: %s, output: %s", containerName, output)
+func Export(containerName, outputName string) error {
+	logger.Debug("starting export, containerName: %s, output: %s", containerName, outputName)
 	if containerName == "" {
 		return fmt.Errorf("container name is nil, %w", ErrContainerNameInvalid)
 	}
@@ -24,8 +24,8 @@ func Export(containerName, output string) error {
 
 	// 输出路径
 	outputDir := "/var/local/images"
-	if output == "" {
-		output = containerConfig.Image
+	if outputName == "" {
+		outputName = containerConfig.Image
 	}
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(outputDir, 0755); err != nil {
@@ -34,7 +34,7 @@ func Export(containerName, output string) error {
 		}
 	}
 
-	tarPath := filepath.Join(outputDir, fmt.Sprintf("%s.tar", output))
+	tarPath := filepath.Join(outputDir, fmt.Sprintf("%s.tar", outputName))
 	mergePath := filepath.Join(filesys.DefaultOverlayFsDir, containerConfig.ID, "merged")
 	cmdOutput, err := exec.Command("tar", "-cvf", tarPath, "-C", mergePath, ".").CombinedOutput()
 	if err != nil {

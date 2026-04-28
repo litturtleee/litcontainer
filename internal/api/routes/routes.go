@@ -6,15 +6,20 @@ import (
 	"litcontainer/internal/api/handlers"
 	"litcontainer/internal/api/middleware"
 	"litcontainer/internal/auth"
+	"litcontainer/internal/daemon"
 	"litcontainer/internal/logger"
 	"log"
 	"os"
 )
 
-func SetupRoutes(r *gin.Engine) {
+func SetupRoutes(r *gin.Engine, d *daemon.Daemon) {
 	r.Use(middleware.Logger())
 	r.Use(middleware.RequestLogger())
 	r.Use(middleware.CORS())
+
+	containerHandler := handlers.NewContainerHandler(d)
+	networkHandler := handlers.NewNetworkHandler(d)
+	imageHandler := handlers.NewImageHandler(d)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -46,7 +51,7 @@ func SetupRoutes(r *gin.Engine) {
 	}
 
 	v1 := r.Group("/api/v1")
-	v1.Use(middleware.AuthMiddleware(authService))
+	//v1.Use(middleware.AuthMiddleware(authService))
 	{
 		// 用户认证相关
 		authProtected := v1.Group("/auth")
@@ -57,26 +62,30 @@ func SetupRoutes(r *gin.Engine) {
 
 		containers := v1.Group("/containers")
 		{
-			containers.GET("list", middleware.PermissionMiddleware(authService, "containers", "list"),
-				handlers.ListContainers)
-			containers.GET(":id", middleware.PermissionMiddleware(authService, "containers", "get"),
-				handlers.GetContainer)
+			// 为了验证先把auth的middleware去掉
+			containers.POST("/create", containerHandler.CreateContainer)
+			containers.POST("/:id/start", containerHandler.StartContainer)
+			containers.POST("/:id/stop", containerHandler.StopContainer)
+			containers.POST("/:id/kill", containerHandler.KillContainer)
+			containers.POST("/:id/wait", containerHandler.WaitContainer)
+			containers.DELETE("/:id", containerHandler.RemoveContainer)
+			containers.GET("/list", containerHandler.ListContainers)
+			containers.GET("/:id", containerHandler.InspectContainer)
+			containers.GET("/:id/logs", containerHandler.LogsContainer)
 		}
 	}
 	// 镜像相关路由
 	images := v1.Group("/images")
 	{
-		images.GET("", handlers.ListImages)
-		// images.GET("/:id", handlers.GetImage)
-		// images.DELETE("/:id", handlers.DeleteImage)
+		images.POST("/export", imageHandler.ExportImage)
 	}
 
 	// 网络相关路由
 	networks := v1.Group("/networks")
 	{
-		networks.GET("list", handlers.ListNetworks)
-		// networks.POST("create", handlers.CreateNetwork)
-		// networks.GET("/:id", handlers.GetNetwork)
-		// networks.DELETE("/:id", handlers.DeleteNetwork)
+		networks.POST("/create", networkHandler.NetworkCreate)
+		networks.DELETE("/:name", networkHandler.NetworkRemove)
+		networks.GET("/list", networkHandler.NetworkList)
+		networks.GET("/:name", networkHandler.NetworkInspect)
 	}
 }

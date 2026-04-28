@@ -3,15 +3,9 @@ package cli
 import (
 	"fmt"
 	"github.com/urfave/cli"
-	"litcontainer/internal/logger"
-	"litcontainer/internal/network"
-	"os"
-	"text/tabwriter"
+	"litcontainer/internal/api/types"
+	"litcontainer/internal/client"
 )
-
-// docker network create --subnet <cidr> --driver <dirver> <name>
-// docker network ls
-// docker network rm <name>
 
 var NetworkCommands = cli.Command{
 	Name:  "network",
@@ -39,17 +33,23 @@ var NetworkCreateCommand = cli.Command{
 	Action: func(ctx *cli.Context) error {
 		name := ctx.Args().Get(0)
 		if name == "" {
-			return fmt.Errorf("missing network name, %w", ErrInvalidArguments)
+			return fmt.Errorf("missing network name, %w", client.ErrInvalidArguments)
 		}
 		subnet := ctx.String("subnet")
 		if subnet == "" {
-			return fmt.Errorf("missing subnet, %w", ErrInvalidArguments)
+			return fmt.Errorf("missing subnet, %w", client.ErrInvalidArguments)
 		}
 		driverType := ctx.String("driver")
 		if driverType == "" {
-			return fmt.Errorf("missing driver, %w", ErrInvalidArguments)
+			return fmt.Errorf("missing driver, %w", client.ErrInvalidArguments)
 		}
-		return network.GetController().Create(name, driverType, subnet)
+
+		cli := client.NewClient()
+		return cli.NetworkCreate(types.NetworkCreateRequest{
+			Name:   name,
+			Subnet: subnet,
+			Driver: driverType,
+		})
 	},
 }
 
@@ -57,20 +57,12 @@ var NetworkListCommand = cli.Command{
 	Name:  "ls",
 	Usage: "list all networks",
 	Action: func(ctx *cli.Context) error {
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintf(w, "NAME\tIPRANGE\tDRIVER\n")
-		nws, err := network.GetController().List()
+		cli := client.NewClient()
+		list, err := cli.NetworkList()
 		if err != nil {
 			return err
 		}
-		for _, nw := range nws {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", nw.Name, nw.IpRange, nw.Driver)
-		}
-		if err := w.Flush(); err != nil {
-			logger.Error("flush w failed: %v", err)
-			return err
-		}
-		return nil
+		return printNetworksInfo(list)
 	},
 }
 
@@ -80,8 +72,11 @@ var NetworkRemoveCommand = cli.Command{
 	Action: func(ctx *cli.Context) error {
 		name := ctx.Args().Get(0)
 		if name == "" {
-			return fmt.Errorf("missing network name, %w", ErrInvalidArguments)
+			return fmt.Errorf("missing network name, %w", client.ErrInvalidArguments)
 		}
-		return network.GetController().Delete(name)
+
+		cli := client.NewClient()
+		return cli.NetworkRemove(name)
+
 	},
 }
