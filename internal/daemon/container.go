@@ -58,6 +58,12 @@ func (d *Daemon) ContainerCreate(opts *CreateOptions) (string, error) {
 		return "", err
 	}
 
+	// 写spec
+	if err := writeSpec(containerConfig.ID, configToSpec(containerConfig)); err != nil {
+		logger.Error("Write spec failed, err: %v", err)
+		return "", err
+	}
+
 	// 写缓存
 	d.mu.Lock()
 	d.containers[containerConfig.ID] = &ContainerState{

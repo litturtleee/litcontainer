@@ -22,7 +22,7 @@ func NewContainerHandler(daemon *daemon.Daemon) *ContainerHandler {
 	}
 }
 
-// Create 创建容器
+// CreateContainer 创建容器
 func (h *ContainerHandler) CreateContainer(c *gin.Context) {
 	var req types.ContainerCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

@@ -7,7 +7,7 @@ import (
 
 const (
 	DefaultLitContainerDir = "/var/lib/litcontainer/container"
-	DefaultConfigFileName  = "config.json"
+	DefaultConfigFileName  = "state.json"
 )
 
 type Config struct {

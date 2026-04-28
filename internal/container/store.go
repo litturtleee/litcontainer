@@ -101,7 +101,7 @@ func WriteContainerConfig(containerConfig *Config) error {
 
 	// 创建目录
 	dirPath := filepath.Join(DefaultLitContainerDir, containerConfig.ID)
-	if err := os.MkdirAll(dirPath, 0644); err != nil {
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		logger.Error("Failed to create container directory: %v", err)
 		return err
 	}
