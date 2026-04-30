@@ -2,14 +2,37 @@ package filesys
 
 import (
 	"litcontainer/internal/logger"
+	"litcontainer/internal/runtime"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
 type MountConfig struct {
 	Source      string `json:"source"`      // 宿主机路径
 	Destination string `json:"destination"` // 容器内路径
+}
+
+var mountOptionFlags = map[string]uintptr{
+	"bind":        syscall.MS_BIND,
+	"rbind":       syscall.MS_BIND | syscall.MS_REC,
+	"ro":          syscall.MS_RDONLY,
+	"rw":          0,
+	"nosuid":      syscall.MS_NOSUID,
+	"nodev":       syscall.MS_NODEV,
+	"noexec":      syscall.MS_NOEXEC,
+	"noatime":     syscall.MS_NOATIME,
+	"relatime":    syscall.MS_RELATIME,
+	"strictatime": syscall.MS_STRICTATIME,
+	"sync":        syscall.MS_SYNCHRONOUS,
+	"remount":     syscall.MS_REMOUNT,
+	"private":     syscall.MS_PRIVATE,
+	"rprivate":    syscall.MS_PRIVATE | syscall.MS_REC,
+	"shared":      syscall.MS_SHARED,
+	"rshared":     syscall.MS_SHARED | syscall.MS_REC,
+	"slave":       syscall.MS_SLAVE,
+	"rslave":      syscall.MS_SLAVE | syscall.MS_REC,
 }
 
 // Mount 实现runc的mount
@@ -26,12 +49,6 @@ func Mount(mountConfigs []MountConfig) error {
 	err = SetMountPropagation()
 	if err != nil {
 		logger.Error("Failed to set mount propagation, err: %v", err)
-		return err
-	}
-	// pivot_root要求new_rootfs必须是挂载点
-	err = prepareMountRootfs(rootfs)
-	if err != nil {
-		logger.Error("Failed to prepare mount rootfs, err: %v", err)
 		return err
 	}
 
@@ -56,7 +73,7 @@ func Mount(mountConfigs []MountConfig) error {
 	}
 
 	// 4.pivot_root
-	err = MountPivotRoot(rootfs)
+	err = PivotRoot(rootfs)
 	if err != nil {
 		logger.Error("Failed to mount pivot root, err: %v", err)
 		return err
@@ -90,16 +107,13 @@ func SetMountPropagation() error {
 	}
 	return nil
 }
-func prepareMountRootfs(rootfs string) error {
-	// pivot_root要求new_root必须是一个挂载点
-	if err := syscall.Mount(rootfs, rootfs, "bind", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
-		logger.Error("Failed to mount rootfs, err: %v", err)
+
+func PivotRoot(rootfs string) error {
+	if err := prepareMountRootfs(rootfs); err != nil {
+		logger.Error("Failed to prepare mount rootfs, err: %v", err)
 		return err
 	}
-	return nil
-}
 
-func MountPivotRoot(rootfs string) error {
 	// 准备pivot_root需要的old_root
 	pivotOldDir := filepath.Join(rootfs, ".pivot_root")
 	logger.Debug("root is %v, PivotOldDir is %v", rootfs, pivotOldDir)
@@ -156,5 +170,74 @@ func MountTmpfs(rootfs string) error {
 		return err
 	}
 	// 处理/dev添加设备
+	return nil
+}
+
+func MountSpec(rootfs string, mounts []*runtime.Mount) error {
+	for _, mount := range mounts {
+		dst := filepath.Join(rootfs, mount.Destination)
+		if err := ensureDir(dst); err != nil {
+			logger.Error("Failed to ensure dir %s, err: %v", dst, err)
+			return err
+		}
+		flags, data := parseMountOptions(mount.Options)
+		if mount.Type == "bind" {
+			if err := bindMount(mount.Source, dst, flags, data); err != nil {
+				logger.Error("Failed to bind mount %s to %s, err: %v", mount.Source, dst, err)
+				return err
+			}
+		} else {
+			if err := syscall.Mount(mount.Source, dst, mount.Type, flags, data); err != nil {
+				logger.Error("Failed to mount %s to %s, err: %v", mount.Source, dst, err)
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// --- 内部方法 ---
+func prepareMountRootfs(rootfs string) error {
+	// pivot_root要求new_root必须是一个挂载点
+	if err := syscall.Mount(rootfs, rootfs, "bind", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		logger.Error("Failed to mount rootfs, err: %v", err)
+		return err
+	}
+	return nil
+}
+
+func ensureDir(path string) error {
+	return os.MkdirAll(filepath.Clean(path), 0755)
+}
+
+func parseMountOptions(options []string) (uintptr, string) {
+	var flags uintptr
+	var data []string
+	for _, option := range options {
+		flag, ok := mountOptionFlags[option]
+		if ok {
+			flags |= flag
+		} else {
+			// 未知的当作data
+			data = append(data, option)
+		}
+	}
+	return flags, strings.Join(data, ",")
+}
+
+// bindMount 绑定挂载
+// 内核限制，需要挂载两次，因为第一次会丢失MS_BIND外的标识位
+func bindMount(src, dst string, flags uintptr, data string) error {
+	if err := syscall.Mount(src, dst, "", syscall.MS_BIND, ""); err != nil {
+		logger.Error("Failed to bind mount %s to %s, err: %v", src, dst, err)
+		return err
+	}
+	remainFlag := flags &^ syscall.MS_BIND
+	if remainFlag != 0 {
+		if err := syscall.Mount("", dst, "", syscall.MS_REMOUNT|syscall.MS_BIND|remainFlag, data); err != nil {
+			logger.Error("Failed to remount %s to %s, err: %v", src, dst, err)
+			return err
+		}
+	}
 	return nil
 }

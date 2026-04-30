@@ -23,6 +23,7 @@ func main() {
 
 	app.Commands = []cli.Command{
 		cli2.RuntimeRunCommand,
+		cli2.RuntimeInitCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

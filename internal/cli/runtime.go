@@ -1,10 +1,24 @@
 package cli
 
-import "github.com/urfave/cli"
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/urfave/cli"
+	"litcontainer/internal/cgroups"
+	"litcontainer/internal/client"
+	"litcontainer/internal/filesys"
+	"litcontainer/internal/logger"
+	"litcontainer/internal/runtime"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+)
 
 var RuntimeRunCommand = cli.Command{
-	Name:  "run",
-	Usage: "create a new container",
+	Name:      "run",
+	Usage:     "create a new container",
+	ArgsUsage: "<container-id>",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "bundle",
@@ -13,7 +27,175 @@ var RuntimeRunCommand = cli.Command{
 	},
 
 	Action: func(context *cli.Context) error {
+		// 解析加载spec
+		bundle := context.String("bundle")
+		if bundle == "" {
+			return fmt.Errorf("bundle is required, %w", client.ErrInvalidArguments)
+		}
+		id := context.Args().First()
+		if id == "" {
+			return fmt.Errorf("container id is required")
+		}
+		spec, err := runtime.LoadSpec(bundle)
+		if err != nil {
+			return fmt.Errorf("load spec failed: %w", err)
+		}
+		if spec.Linux == nil {
+			return fmt.Errorf("invalid spec: linux is required")
+		}
+		var cloneFlags uintptr
+		if len(spec.Linux.Namespaces) > 0 {
+			cloneFlags = runtime.CloneFlags(spec.Linux.Namespaces)
+		}
+		// 创建pipe
+		r, w, err := os.Pipe()
+		if err != nil {
+			return err
+		}
+		// 创建并启动initCmd
+		self, _ := os.Executable()
+		initCmd := exec.Command(self, "init")
+		initCmd.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: cloneFlags,
+		}
+		initCmd.ExtraFiles = []*os.File{r}
+		initCmd.Stdin, initCmd.Stdout, initCmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := initCmd.Start(); err != nil {
+			return fmt.Errorf("start init cmd failed: %w", err)
+		}
+		r.Close()
+		// 配置cgroup
+		cgroup, err := cgroups.NewCGroupManager(spec.Linux.CgroupsPath)
+		if err != nil {
+			return fmt.Errorf("new cgroup manager failed: %w", err)
+		}
+		if err := cgroup.Apply(initCmd.Process.Pid); err != nil {
+			return fmt.Errorf("apply cgroup failed: %w", err)
+		}
+		if spec.Linux.Resources != nil {
+			if spec.Linux.Resources.CPU != nil {
+				if err := cgroup.SetCPULimitRaw(spec.Linux.Resources.CPU.Quota,
+					spec.Linux.Resources.CPU.Period); err != nil {
+					return fmt.Errorf("set cpu limit failed: %w", err)
+				}
+			}
+			if spec.Linux.Resources.Memory != nil {
+				if err := cgroup.SetMemoryLimitRaw(spec.Linux.Resources.Memory.Limit); err != nil {
+					return fmt.Errorf("set memory limit failed: %w", err)
+				}
+			}
+		}
+		// 错误处理
+		success := false
+		defer func() {
+			if !success {
+				initCmd.Process.Kill()
+				if cgroup != nil {
+					cgroup.Cleanup()
+				}
+			}
+		}()
+		// prestart hooks
+		state := &runtime.ContainerState{
+			ID:      id,
+			Version: spec.Version,
+			Bundle:  bundle,
+			PID:     initCmd.Process.Pid,
+			Status:  "creating",
+		}
+		if spec.Hooks != nil {
+			if err := runtime.RunHooks(spec.Hooks.Prestart, state); err != nil {
+				return fmt.Errorf("run prestart hooks failed: %w", err)
+			}
+		}
+		// send config to init process
+		specJSON, _ := json.Marshal(spec)
+		if _, err := w.Write(specJSON); err != nil {
+			initCmd.Process.Kill()
+			return fmt.Errorf("send spec.json to init process failed: %w", err)
+		}
+		w.Close()
+		// wait
+		if err := initCmd.Wait(); err != nil {
+			logger.Error("init process exited: %v", err)
+		}
+		// poststop hooks
+		state.Status = "stopped"
+		state.PID = 0
+		if spec.Hooks != nil {
+			if err := runtime.RunHooks(spec.Hooks.Poststop, state); err != nil {
+				logger.Error("run poststop hooks failed: %v", err)
+			}
+		}
+		// cgroup clean
+		if err := cgroup.Cleanup(); err != nil {
+			logger.Error("clean cgroup failed: %v", err)
+		}
+		// exit
+		exitCode := -1
+		if initCmd.ProcessState != nil {
+			exitCode = initCmd.ProcessState.ExitCode()
+		}
+		success = true
+		os.Exit(exitCode)
+		return nil
+	},
+}
 
+var RuntimeInitCommand = cli.Command{
+	Name:  "init",
+	Usage: "initialize a new container",
+	Action: func(context *cli.Context) error {
+		// receive config
+		pipe := os.NewFile(3, "pipe")
+		defer pipe.Close()
+		var spec runtime.Spec
+		if err := json.NewDecoder(pipe).Decode(&spec); err != nil {
+			logger.Error("Failed to decode spec.json: %v", err)
+			return fmt.Errorf("failed to decode serverconfig.json, %w", err)
+		}
+		// set hostname
+		if spec.Hostname != "" {
+			if err := syscall.Sethostname([]byte(spec.Hostname)); err != nil {
+				logger.Error("Failed to set hostname: %v", err)
+				return fmt.Errorf("failed to set hostname, %w", err)
+			}
+		}
+		// 隔断挂载传播
+		if err := filesys.SetMountPropagation(); err != nil {
+			logger.Error("Failed to set mount propagation: %v", err)
+			return fmt.Errorf("failed to set mount propagation, %w", err)
+		}
+		// 挂载mounts(/proc、/dev等以及volume）
+		rootfs := spec.Root.Path
+		if err := filesys.MountSpec(rootfs, spec.Mounts); err != nil {
+			logger.Error("Failed to mount spec.mounts: %v", err)
+			return fmt.Errorf("failed to mount spec.mounts, %w", err)
+		}
+		// pivot root
+		if err := filesys.PivotRoot(rootfs); err != nil {
+			logger.Error("Failed to pivot root: %v", err)
+			return fmt.Errorf("failed to pivot root, %w", err)
+		}
+		// exec
+		for _, e := range spec.Process.Env {
+			if strings.HasPrefix(e, "PATH=") {
+				os.Setenv("PATH", strings.TrimPrefix(e, "PATH="))
+				break
+			}
+		}
+		path, err := exec.LookPath(spec.Process.Args[0])
+		if err != nil {
+			logger.Error("Failed to find command: %v", err)
+			return fmt.Errorf("failed to find command, %w", err)
+		}
+		if spec.Process.Cwd != "" {
+			os.Chdir(spec.Process.Cwd) // 在容器 rootfs 内 chdir
+		}
+		if err := syscall.Exec(path, spec.Process.Args, spec.Process.Env); err != nil {
+			logger.Error("Failed to exec: %v", err)
+			return fmt.Errorf("failed to exec, %w", err)
+		}
 		return nil
 	},
 }

@@ -30,7 +30,7 @@ func NewInitProcess(containerCfg *container.Config) (*exec.Cmd, *os.File, error)
 	}
 
 	// 修改子进程工作目录，子进程启动后就是
-	initCmd.Dir = filepath.Join(filesys.GetMountPoint(containerCfg.ID), "merged")
+	initCmd.Dir = filesys.GetMountPoint(containerCfg.ID)
 
 	// 配置 Linux 命名空间隔离标志
 	initCmd.SysProcAttr = &syscall.SysProcAttr{

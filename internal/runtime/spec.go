@@ -1,5 +1,10 @@
 package runtime
 
+const (
+	OciVersion          = "1.0.0-litcontainer"
+	DefaultSpecFileName = "config.json"
+)
+
 type Spec struct {
 	Version  string   `json:"ociVersion"`
 	Root     *Root    `json:"root"`
@@ -7,6 +12,7 @@ type Spec struct {
 	Hostname string   `json:"hostname,omitempty"` // 容器主机名
 	Mounts   []*Mount `json:"mounts,omitempty"`
 	Linux    *Linux   `json:"linux,omitempty"`
+	Hooks    *Hooks   `json:"hooks,omitempty"`
 }
 
 type Root struct {
@@ -50,4 +56,16 @@ type MemoryResources struct {
 type CPUResources struct {
 	Quota  int64  `json:"quota,omitempty"`
 	Period uint64 `json:"period,omitempty"`
+}
+
+type Hooks struct {
+	Prestart []Hook `json:"prestart,omitempty"`
+	Poststop []Hook `json:"poststop,omitempty"`
+}
+
+type Hook struct {
+	Path    string   `json:"path"`              // 可执行文件绝对路径
+	Args    []string `json:"args,omitempty"`    // 参数（含 argv[0]）
+	Env     []string `json:"env,omitempty"`     // 额外环境变量
+	Timeout *int     `json:"timeout,omitempty"` // 超时秒数
 }

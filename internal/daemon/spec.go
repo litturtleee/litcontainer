@@ -11,15 +11,10 @@ import (
 	"path/filepath"
 )
 
-const (
-	ociVersion          = "1.0.0-litcontainer"
-	DefaultSpecFileName = "config.json"
-)
-
 // configToSpec 将容器配置转换为运行时规范
 func configToSpec(cfg *container.Config) *runtime.Spec {
 	return &runtime.Spec{
-		Version:  ociVersion,
+		Version:  runtime.OciVersion,
 		Hostname: cfg.ID[:12],
 		Root: &runtime.Root{
 			Path: filesys.GetMountPoint(cfg.ID),
@@ -79,7 +74,7 @@ func buildLinux(cfg *container.Config) *runtime.Linux {
 			{Type: "pid"}, {Type: "mount"}, {Type: "uts"},
 			{Type: "ipc"}, {Type: "network"},
 		},
-		CgroupsPath: "litcontainer-" + cfg.ID,
+		CgroupsPath: filepath.Join(cgroups.CgroupRoot, "litcontainer-"+cfg.ID+".scope"),
 		Resources: &runtime.Resources{
 			CPU:    cpuResourcesFromConfig(cfg),
 			Memory: memoryResourcesFromConfig(cfg),
@@ -129,7 +124,7 @@ func writeSpec(containerId string, spec *runtime.Spec) error {
 		return err
 	}
 
-	filePath := filepath.Join(dirPath, DefaultSpecFileName)
+	filePath := filepath.Join(dirPath, runtime.DefaultSpecFileName)
 	if err := os.WriteFile(filePath, jsonStr, 0644); err != nil {
 		return err
 	}
