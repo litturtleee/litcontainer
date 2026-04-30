@@ -27,6 +27,24 @@ var RuntimeRunCommand = cli.Command{
 	},
 
 	Action: func(context *cli.Context) error {
+		// 错误处理
+		type cleanupFn func()
+		var cleanups []cleanupFn
+		addCleanup := func(cleanup cleanupFn) {
+			cleanups = append(cleanups, cleanup)
+		}
+		runCleanups := func() {
+			for i := 0; i < len(cleanups); i++ {
+				cleanups[i]()
+			}
+		}
+		success := false
+		defer func() {
+			if !success {
+				runCleanups()
+			}
+		}()
+
 		// 解析加载spec
 		bundle := context.String("bundle")
 		if bundle == "" {
@@ -64,11 +82,29 @@ var RuntimeRunCommand = cli.Command{
 			return fmt.Errorf("start init cmd failed: %w", err)
 		}
 		r.Close()
+		addCleanup(func() {
+			initCmd.Process.Kill()
+			initCmd.Process.Wait()
+		})
+		// 保存state
+		state := &runtime.ContainerState{
+			ID:      id,
+			Version: spec.Version,
+			Bundle:  bundle,
+			PID:     initCmd.Process.Pid,
+			Status:  "created",
+		}
+		if err := runtime.WriteState(state); err != nil {
+			return fmt.Errorf("write state failed: %w", err)
+		}
+		addCleanup(func() { runtime.RemoveState(id) })
+
 		// 配置cgroup
 		cgroup, err := cgroups.NewCGroupManager(spec.Linux.CgroupsPath)
 		if err != nil {
 			return fmt.Errorf("new cgroup manager failed: %w", err)
 		}
+		addCleanup(func() { cgroup.Cleanup() })
 		if err := cgroup.Apply(initCmd.Process.Pid); err != nil {
 			return fmt.Errorf("apply cgroup failed: %w", err)
 		}
@@ -85,24 +121,7 @@ var RuntimeRunCommand = cli.Command{
 				}
 			}
 		}
-		// 错误处理
-		success := false
-		defer func() {
-			if !success {
-				initCmd.Process.Kill()
-				if cgroup != nil {
-					cgroup.Cleanup()
-				}
-			}
-		}()
 		// prestart hooks
-		state := &runtime.ContainerState{
-			ID:      id,
-			Version: spec.Version,
-			Bundle:  bundle,
-			PID:     initCmd.Process.Pid,
-			Status:  "creating",
-		}
 		if spec.Hooks != nil {
 			if err := runtime.RunHooks(spec.Hooks.Prestart, state); err != nil {
 				return fmt.Errorf("run prestart hooks failed: %w", err)
@@ -111,10 +130,14 @@ var RuntimeRunCommand = cli.Command{
 		// send config to init process
 		specJSON, _ := json.Marshal(spec)
 		if _, err := w.Write(specJSON); err != nil {
-			initCmd.Process.Kill()
 			return fmt.Errorf("send spec.json to init process failed: %w", err)
 		}
 		w.Close()
+		// 更新state
+		state.Status = "running"
+		if err := runtime.WriteState(state); err != nil {
+			logger.Error("write state failed: %v", err)
+		}
 		// wait
 		if err := initCmd.Wait(); err != nil {
 			logger.Error("init process exited: %v", err)
@@ -127,16 +150,13 @@ var RuntimeRunCommand = cli.Command{
 				logger.Error("run poststop hooks failed: %v", err)
 			}
 		}
-		// cgroup clean
-		if err := cgroup.Cleanup(); err != nil {
-			logger.Error("clean cgroup failed: %v", err)
-		}
+		success = true
+		runCleanups()
 		// exit
 		exitCode := -1
 		if initCmd.ProcessState != nil {
 			exitCode = initCmd.ProcessState.ExitCode()
 		}
-		success = true
 		os.Exit(exitCode)
 		return nil
 	},

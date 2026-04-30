@@ -7,7 +7,9 @@ import (
 	"litcontainer/internal/filesys"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
+	"litcontainer/internal/runtime"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -93,65 +95,40 @@ func (d *Daemon) ContainerStart(idOrName string) error {
 	if cfg.TTY {
 		return fmt.Errorf("tty not supported")
 	}
+	// todo:临时禁用网络
+	if cfg.Network != "" {
+		return fmt.Errorf("network not supported")
+	}
 	if cfg.State != container.CreatedState && cfg.State != container.StoppedState {
 		logger.Error("Container %s is not in created or stopped state", id)
 		return fmt.Errorf("container %s is not in created or stopped state", id)
 	}
-	// 启动容器
-	initCmd, writePipe, err := NewInitProcess(cfg)
+
+	// 调用runc
+	bundleDir := filepath.Join(container.DefaultLitContainerDir, id)
+	runtimeRunCmd := exec.Command("litcontainer-runc", "run", "--bundle", bundleDir, cfg.ID)
+	// 设置log, initc.std ->runc.std->logfile
+	// todo:当前日志会混杂runc的日志
+	logPath := filepath.Join(container.DefaultLitContainerDir, id, container.DefaultContainerLogFileName)
+	logFile, err := os.Create(logPath)
 	if err != nil {
-		logger.Error("New init process failed, err: %v", err)
-		return err
+		return fmt.Errorf("create log file failed: %w", err)
 	}
+	defer logFile.Close()
+	runtimeRunCmd.Stdout, runtimeRunCmd.Stderr = logFile, logFile
 
-	// 保证子进程有错误清理
-	success := false
-	defer func() {
-		if !success {
-			initCmd.Process.Kill()
-		}
-	}()
-
-	// 配置cgroup
-	cg, err := SetupCGroup(initCmd.Process.Pid, cfg.ID, cfg.CPULimit, cfg.MemoryLimit)
-	if err != nil {
-		logger.Error("Setup cgroup failed, err: %v", err)
-		return err
-	}
-
-	// 配置网络
-	var ipAddr string
-	if cfg.Network != "" {
-		epCfg := &network.ContainerEndpointConfig{
-			ID:           cfg.ID,
-			Pid:          initCmd.Process.Pid,
-			IPAddress:    cfg.IpAddress,
-			PortMappings: cfg.PortMappings,
-		}
-		ip, err := d.netCtrl.Connect(cfg.Network, epCfg)
-		if err != nil {
-			logger.Error("Failed to connect network: %v", err)
-			return err
-		}
-		ipAddr = ip.String()
-	}
-
-	// 将配置发送给init进程
-	if err := SendInitConfig(writePipe, cfg); err != nil {
-		logger.Error("Send init config failed, err: %v", err)
+	if err := runtimeRunCmd.Start(); err != nil {
+		logger.Error("Failed to start runc, err: %v", err)
 		return err
 	}
 
 	// 更新config
 	d.mu.Lock()
-	cfg.Pid = initCmd.Process.Pid
-	if ipAddr != "" {
-		cfg.IpAddress = ipAddr
-	}
+	// 这里是runc runCmd的pid，非容器的pid
+	cfg.Pid = runtimeRunCmd.Process.Pid
 	cfg.State = container.RunningState
 	cfg.UpdateAt = time.Now().Format(time.DateTime)
-	state.Cmd = initCmd
-	state.CGroup = cg
+	state.Cmd = runtimeRunCmd
 	state.done = make(chan struct{})
 	d.mu.Unlock()
 
@@ -163,9 +140,7 @@ func (d *Daemon) ContainerStart(idOrName string) error {
 
 	// 起goroutine 监控容器
 	go d.waitContainer(state)
-	success = true
 	return nil
-
 }
 
 // ContainerWait 等待容器结束
@@ -200,9 +175,16 @@ func (d *Daemon) ContainerStop(idOrName string, timeout time.Duration) error {
 		return container.ErrContainerNotRunning
 	}
 
+	// 因为state.Cmd.Process中目前临时记录的是runcRunCmd的pid
+	rtState, err := runtime.LoadState(id)
+	if err != nil {
+		logger.Error("Load runc state failed, err: %v", err)
+		return container.ErrContainerNotFound
+	}
+
 	// 1.发送SIGTERM
-	if err := state.Cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		logger.Error("Failed to send SIGTERM to container: %v", err)
+	if err := syscall.Kill(rtState.PID, syscall.SIGTERM); err != nil {
+		logger.Error("Failed to send SIGTERM to container %s, err: %v", id, err)
 		return err
 	}
 
@@ -212,7 +194,7 @@ func (d *Daemon) ContainerStop(idOrName string, timeout time.Duration) error {
 		return nil
 	case <-time.After(timeout):
 		logger.Warn("Stop container %s timeout", id)
-		state.Cmd.Process.Kill()
+		syscall.Kill(rtState.PID, syscall.SIGKILL)
 		// 等cleanup完成
 		<-state.done
 		return nil
@@ -234,7 +216,13 @@ func (d *Daemon) ContainerKill(idOrName string, signal syscall.Signal) error {
 	if state.Config.State != container.RunningState {
 		return container.ErrContainerNotRunning
 	}
-	return state.Cmd.Process.Signal(signal)
+	rtState, err := runtime.LoadState(id)
+	if err != nil {
+		logger.Error("Load runc state failed, err: %v", err)
+		return container.ErrContainerNotRunning
+	}
+
+	return syscall.Kill(rtState.PID, signal)
 }
 
 // ContainerRemove 删除容器
@@ -333,11 +321,7 @@ func (d *Daemon) waitContainer(state *ContainerState) {
 }
 
 func (d *Daemon) cleanupContainer(state *ContainerState) {
-	cg := state.CGroup
 	cfg := state.Config
-	if err := cg.Cleanup(); err != nil {
-		logger.Error("Failed to cleanup resource: %v", err)
-	}
 
 	if err := filesys.UmountOverlayFS(cfg.ID); err != nil {
 		logger.Error("Failed to umount overlayfs: %v", err)
@@ -358,6 +342,7 @@ func (d *Daemon) cleanupContainer(state *ContainerState) {
 	d.mu.Lock()
 	cfg.State = container.StoppedState
 	cfg.UpdateAt = time.Now().Format(time.DateTime)
+	cfg.Pid = 0
 	d.mu.Unlock()
 
 	if err := container.WriteContainerConfig(cfg); err != nil {

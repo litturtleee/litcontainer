@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"litcontainer/internal/cgroups"
 	"litcontainer/internal/container"
 	"litcontainer/internal/network"
 	"os/exec"
@@ -18,7 +17,6 @@ type Daemon struct {
 type ContainerState struct {
 	Config *container.Config
 	Cmd    *exec.Cmd
-	CGroup *cgroups.CGroupManager
 	done   chan struct{}
 }
 

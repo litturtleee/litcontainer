@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/gin-gonic/gin"
 	"litcontainer/internal/api/routes"
-	"litcontainer/internal/container"
 	"litcontainer/internal/daemon"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
@@ -21,15 +20,6 @@ const (
 )
 
 func main() {
-	// ★ 子进程入口：识别 init 参数，跑容器初始化后立即返回
-	if len(os.Args) > 1 && os.Args[1] == "init" {
-		if err := container.InitContainerProcess(); err != nil {
-			logger.Error("container init failed: %v", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	err := network.Init(network.DefaultNetworkDBPath)
 	if err != nil {
 		panic(err)
