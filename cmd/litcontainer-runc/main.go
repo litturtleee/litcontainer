@@ -24,6 +24,9 @@ func main() {
 	app.Commands = []cli.Command{
 		cli2.RuntimeRunCommand,
 		cli2.RuntimeInitCommand,
+		cli2.RuntimeCreateCommand,
+		cli2.RuntimeStartCommand,
+		cli2.RuntimeDeleteCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

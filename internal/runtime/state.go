@@ -11,6 +11,8 @@ const (
 	DefaultRuntimeStateRootPath = "/run/litcontainer-runc"
 )
 
+// ContainerState 容器状态
+// runc状态文件
 type ContainerState struct {
 	Version     string            `json:"ociVersion"`
 	ID          string            `json:"id"`

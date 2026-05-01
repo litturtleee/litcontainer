@@ -1,10 +1,19 @@
 package runtime
 
+import (
+	"encoding/json"
+	"litcontainer/internal/logger"
+	"os"
+	"path/filepath"
+)
+
 const (
 	OciVersion          = "1.0.0-litcontainer"
 	DefaultSpecFileName = "config.json"
 )
 
+// Spec 运行时规范
+// 符合oci标准，runc create时runc唯一读取的文件
 type Spec struct {
 	Version  string   `json:"ociVersion"`
 	Root     *Root    `json:"root"`
@@ -68,4 +77,21 @@ type Hook struct {
 	Args    []string `json:"args,omitempty"`    // 参数（含 argv[0]）
 	Env     []string `json:"env,omitempty"`     // 额外环境变量
 	Timeout *int     `json:"timeout,omitempty"` // 超时秒数
+}
+
+func LoadSpec(bundleDir string) (*Spec, error) {
+	content, err := os.ReadFile(filepath.Join(bundleDir, DefaultSpecFileName))
+	if err != nil {
+		logger.Error("failed to read spec file: %v", err)
+		return nil, err
+	}
+
+	var spec Spec
+	err = json.Unmarshal(content, &spec)
+	if err != nil {
+		logger.Error("failed to unmarshal spec: %v", err)
+		return nil, err
+	}
+
+	return &spec, nil
 }
