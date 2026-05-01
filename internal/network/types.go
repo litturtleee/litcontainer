@@ -34,7 +34,6 @@ type Endpoint struct {
 // ContainerEndpointConfig 容器连接网络需要的信息
 type ContainerEndpointConfig struct {
 	ID           string
-	Pid          int
 	IPAddress    string
 	PortMappings []string
 }

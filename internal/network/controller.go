@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -207,7 +208,7 @@ func (c *Controller) Connect(name string, epCfg *ContainerEndpointConfig) (*net.
 
 	// 创建endpoint
 	endpoint := &Endpoint{
-		ID:          fmt.Sprintf("%s-%s", epCfg.ID, name),
+		ID:          epCfg.ID,
 		IPAddress:   allocatedIP,
 		Network:     nw,
 		PortMapping: epCfg.PortMappings,
@@ -258,7 +259,7 @@ func (c *Controller) Disconnect(name string, epCfg *ContainerEndpointConfig) err
 		return err
 	}
 	ep := &Endpoint{
-		ID:          fmt.Sprintf("%s-%s", epCfg.ID, name),
+		ID:          epCfg.ID,
 		IPAddress:   net.ParseIP(epCfg.IPAddress),
 		Network:     nw,
 		PortMapping: epCfg.PortMappings,
@@ -311,7 +312,12 @@ func configEndpointNetwork(endpoint *Endpoint, epCfg *ContainerEndpointConfig) e
 		return err
 	}
 	// 把对端设置到容器内(defer才会推出ns)
-	defer configNetNs(&peerLink, epCfg)()
+	cleanup, err := configNetNs(&peerLink, epCfg)
+	if err != nil {
+		logger.Error("config net ns failed: %v", err)
+		return err
+	}
+	defer cleanup()
 	// 设置ip
 	ip := net.IPNet{
 		IP:   endpoint.IPAddress,
@@ -355,52 +361,50 @@ func configEndpointNetwork(endpoint *Endpoint, epCfg *ContainerEndpointConfig) e
 // configNetNs
 // 锁定线程将设备切换到目标ns中
 // 将当前线程设置到目标命名空间
-func configNetNs(peerLink *netlink.Link, epc *ContainerEndpointConfig) func() {
-	file, err := os.OpenFile(fmt.Sprintf("/proc/%d/ns/net", epc.Pid), os.O_RDONLY, 0)
+func configNetNs(peerLink *netlink.Link, epc *ContainerEndpointConfig) (func(), error) {
+	netNsPath := filepath.Join(NetnsRootDir, epc.ID)
+	file, err := os.OpenFile(netNsPath, os.O_RDONLY, 0)
 	if err != nil {
 		logger.Error("open net ns failed: %v", err)
-		return nil
+		return nil, err
 	}
 	nsFd := file.Fd()
 
 	// 锁定线程
 	runtime.LockOSThread()
 
+	cleanup := func() {
+		runtime.UnlockOSThread()
+		file.Close()
+	}
 	err = netlink.LinkSetNsFd(*peerLink, int(nsFd))
 	if err != nil {
 		logger.Error("set link to net ns failed: %v", err)
-		return nil
+		cleanup()
+		return nil, err
 	}
 
 	orignNs, err := netns.Get()
 	if err != nil {
 		logger.Error("get current net ns failed: %v", err)
-		return nil
+		cleanup()
+		return nil, err
 	}
 
+	cleanup = func() {
+		netns.Set(orignNs)
+		orignNs.Close()
+		runtime.UnlockOSThread()
+		file.Close()
+	}
 	err = netns.Set(netns.NsHandle(nsFd))
 	if err != nil {
 		logger.Error("set net ns failed: %v", err)
-		return nil
+		cleanup()
+		return nil, err
 	}
 
-	return func() {
-		// 恢复ns命名空间
-		err = netns.Set(orignNs)
-		if err != nil {
-			logger.Error("set net ns failed: %v", err)
-		}
-		err = orignNs.Close()
-		if err != nil {
-			logger.Error("close net ns failed: %v", err)
-		}
-		// 恢复线程
-		runtime.UnlockOSThread()
-		err = file.Close()
-		if err != nil {
-			logger.Error("close net ns file failed: %v", err)
-		}
-	}
+	return cleanup, nil
 }
 
 // configPortMapping

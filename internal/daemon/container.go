@@ -60,12 +60,6 @@ func (d *Daemon) ContainerCreate(opts *CreateOptions) (string, error) {
 		return "", err
 	}
 
-	// 写spec
-	if err := writeSpec(containerConfig.ID, configToSpec(containerConfig)); err != nil {
-		logger.Error("Write spec failed, err: %v", err)
-		return "", err
-	}
-
 	// 写缓存
 	d.mu.Lock()
 	d.containers[containerConfig.ID] = &ContainerState{
@@ -95,10 +89,47 @@ func (d *Daemon) ContainerStart(idOrName string) error {
 	if cfg.TTY {
 		return fmt.Errorf("tty not supported")
 	}
-	// todo:临时禁用网络
+	// 初始化网络
+	var netnsPath string
 	if cfg.Network != "" {
-		return fmt.Errorf("network not supported")
+		netnsPath, err = network.CreateNetns(id)
+		if err != nil {
+			logger.Error("Create netns failed, err: %v", err)
+			return err
+		}
+		success := false
+		defer func() {
+			if !success {
+				network.RemoveNetns(id)
+			}
+		}()
+		ip, err := d.netCtrl.Connect(cfg.Network, &network.ContainerEndpointConfig{
+			ID:           id,
+			PortMappings: cfg.PortMappings,
+		})
+		if err != nil {
+			logger.Error("Connect network failed, err: %v", err)
+			return err
+		}
+		cfg.IpAddress = ip.String()
+		success = true
 	}
+
+	// create的时候不会初始化网络，这里初始化了要更新，这样容器ioc启动可以从net的path里拿到想要的内容
+	spec := configToSpec(cfg)
+	if netnsPath != "" {
+		for _, ns := range spec.Linux.Namespaces {
+			if ns.Type == "network" {
+				ns.Path = netnsPath
+				break
+			}
+		}
+	}
+	if err := writeSpec(id, spec); err != nil {
+		logger.Error("Write spec failed, err: %v", err)
+		return err
+	}
+
 	if cfg.State != container.CreatedState && cfg.State != container.StoppedState {
 		logger.Error("Container %s is not in created or stopped state", id)
 		return fmt.Errorf("container %s is not in created or stopped state", id)
@@ -331,11 +362,13 @@ func (d *Daemon) cleanupContainer(state *ContainerState) {
 		epCfg := &network.ContainerEndpointConfig{
 			ID:           cfg.ID,
 			IPAddress:    cfg.IpAddress,
-			Pid:          cfg.Pid,
 			PortMappings: cfg.PortMappings,
 		}
 		if err := d.netCtrl.Disconnect(cfg.Network, epCfg); err != nil {
 			logger.Error("Failed to disconnect network: %v", err)
+		}
+		if err := network.RemoveNetns(cfg.ID); err != nil {
+			logger.Error("Failed to remove network namespace: %v", err)
 		}
 	}
 

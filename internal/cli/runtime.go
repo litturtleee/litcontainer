@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/urfave/cli"
+	"golang.org/x/sys/unix"
 	"litcontainer/internal/cgroups"
 	"litcontainer/internal/client"
 	"litcontainer/internal/filesys"
@@ -11,6 +12,7 @@ import (
 	"litcontainer/internal/runtime"
 	"os"
 	"os/exec"
+	runtime2 "runtime"
 	"strings"
 	"syscall"
 )
@@ -166,6 +168,7 @@ var RuntimeInitCommand = cli.Command{
 	Name:  "init",
 	Usage: "initialize a new container",
 	Action: func(context *cli.Context) error {
+		runtime2.LockOSThread()
 		// receive config
 		pipe := os.NewFile(3, "pipe")
 		defer pipe.Close()
@@ -173,6 +176,35 @@ var RuntimeInitCommand = cli.Command{
 		if err := json.NewDecoder(pipe).Decode(&spec); err != nil {
 			logger.Error("Failed to decode spec.json: %v", err)
 			return fmt.Errorf("failed to decode serverconfig.json, %w", err)
+		}
+		// setns(path不为空的)
+		nsTypeFlags := map[string]int{
+			"pid":     syscall.CLONE_NEWPID,
+			"mount":   syscall.CLONE_NEWNS,
+			"uts":     syscall.CLONE_NEWUTS,
+			"ipc":     syscall.CLONE_NEWIPC,
+			"network": syscall.CLONE_NEWNET,
+		}
+		for _, ns := range spec.Linux.Namespaces {
+			if ns.Path != "" {
+				fd, err := os.Open(ns.Path)
+				if err != nil {
+					logger.Error("Failed to open namespace: %v", err)
+					return fmt.Errorf("failed to open namespace, %w", err)
+				}
+				flag, ok := nsTypeFlags[ns.Type]
+				if !ok {
+					fd.Close()
+					logger.Error("Invalid namespace type: %s", ns.Type)
+					return fmt.Errorf("invalid namespace type, %w", err)
+				}
+				if err := unix.Setns(int(fd.Fd()), flag); err != nil {
+					fd.Close()
+					logger.Error("Failed to set namespace: %v", err)
+					return fmt.Errorf("failed to set namespace, %w", err)
+				}
+				fd.Close()
+			}
 		}
 		// set hostname
 		if spec.Hostname != "" {

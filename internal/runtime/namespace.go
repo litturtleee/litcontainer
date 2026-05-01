@@ -13,6 +13,10 @@ func CloneFlags(namespace []*Namespace) uintptr {
 	var flags uintptr
 
 	for _, ns := range namespace {
+		// path不为空则以setns的方式进入ns
+		if ns.Path != "" {
+			continue
+		}
 		flags |= mapping[ns.Type]
 	}
 
