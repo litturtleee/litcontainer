@@ -19,6 +19,13 @@ const (
 	socketPath = "/var/run/litcontainer.sock"
 )
 
+func init() {
+	logger.SetLevel(logger.DEBUG)
+	logger.SetIncludeTrace(true)
+	logger.SetOutput(os.Stdout)
+	logger.SetIncludePID(true)
+}
+
 func main() {
 	err := network.Init(network.DefaultNetworkDBPath)
 	if err != nil {

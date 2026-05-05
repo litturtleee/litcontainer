@@ -9,6 +9,9 @@ import (
 
 const (
 	DefaultRuntimeStateRootPath = "/run/litcontainer-runc"
+	StateRunning                = "running"
+	StateStopped                = "stopped"
+	StateCreated                = "created"
 )
 
 // ContainerState 容器状态

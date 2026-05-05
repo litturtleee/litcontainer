@@ -314,7 +314,7 @@ func setupContainer(spec *runtime.Spec, bundle, id, pidFile string) (*containerP
 		Version: spec.Version,
 		Bundle:  bundle,
 		PID:     initCmd.Process.Pid,
-		Status:  "created",
+		Status:  runtime.StateCreated,
 	}
 	if err := runtime.WriteState(state); err != nil {
 		return &containerProcess, fmt.Errorf("write state failed: %w", err)
@@ -384,7 +384,7 @@ func triggerStart(id string) error {
 		return fmt.Errorf("load state failed: %w", err)
 	}
 	// check state
-	if state.Status != "created" {
+	if state.Status != runtime.StateCreated {
 		return fmt.Errorf("container %s is not in created state", id)
 	}
 	// open fifo 释放init阻塞
@@ -401,7 +401,7 @@ func triggerStart(id string) error {
 	}
 
 	// writeState
-	state.Status = "running"
+	state.Status = runtime.StateRunning
 	if err := runtime.WriteState(state); err != nil {
 		return fmt.Errorf("write state failed: %w", err)
 	}
@@ -429,7 +429,7 @@ func deleteContainer(id string, force bool) error {
 	}
 
 	// poststop hook
-	state.Status = "stopped"
+	state.Status = runtime.StateStopped
 	state.PID = 0
 	spec, _ := runtime.LoadSpec(state.Bundle)
 	if spec.Hooks != nil {
