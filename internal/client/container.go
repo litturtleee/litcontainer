@@ -48,16 +48,16 @@ func (c *Client) RemoveContainer(idOrName string, force bool) error {
 	return c.do("DELETE", path, nil, nil)
 }
 
-func (c *Client) ListContainers() ([]*container.Config, error) {
-	var containers []*container.Config
+func (c *Client) ListContainers() ([]*container.Info, error) {
+	var containers []*container.Info
 	err := c.do("GET", "/api/v1/containers/list", nil, &containers)
 	return containers, err
 }
 
-func (c *Client) InspectContainer(idOrName string) (*container.Config, error) {
-	var containerCfg *container.Config
-	err := c.do("GET", "/api/v1/containers/"+idOrName, nil, &containerCfg)
-	return containerCfg, err
+func (c *Client) InspectContainer(idOrName string) (*container.Info, error) {
+	var containerInfo *container.Info
+	err := c.do("GET", "/api/v1/containers/"+idOrName, nil, &containerInfo)
+	return containerInfo, err
 }
 
 func (c *Client) LogsContainer(idOrName string) ([]byte, error) {

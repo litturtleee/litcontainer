@@ -22,18 +22,17 @@ type CGroupManager struct {
 }
 
 // NewCGroupManager 创建 CGroupManager 实例, 包括创建文件夹、初始化文件等
-func NewCGroupManager(path string) *CGroupManager {
-	cgroupPath := filepath.Join(CgroupRoot, path)
+func NewCGroupManager(cgroupPath string) (*CGroupManager, error) {
 	if _, err := os.Stat(cgroupPath); os.IsNotExist(err) {
 		if err := os.Mkdir(cgroupPath, 0755); err != nil {
 			logger.Error("Error creating cgroup: %v", err)
-			os.Exit(1)
+			return nil, err
 		}
 	}
 
 	return &CGroupManager{
 		path: cgroupPath,
-	}
+	}, nil
 }
 
 // Apply 将给定的进程ID（pid）加入到 cgroup 中。
@@ -69,11 +68,25 @@ func (c *CGroupManager) SetCPULimit(cpusStr string) error {
 		return err
 	}
 
+	return c.SetCPULimitRaw(int64(quota), uint64(period))
+}
+
+func (c *CGroupManager) SetCPULimitRaw(quota int64, period uint64) error {
 	cpuMaxPath := filepath.Join(c.path, CpuMax)
 	cpuLimit := fmt.Sprintf("%d %d", quota, period)
 	if err := os.WriteFile(cpuMaxPath, []byte(cpuLimit), 0644); err != nil {
 		logger.Error("Error writing cpu max to cgroup: %v", err)
 		return fmt.Errorf("failed to write cpu max to cgroup: %w", err)
+	}
+	return nil
+}
+
+func (c *CGroupManager) SetMemoryLimitRaw(memoryLimit int64) error {
+	memoryMaxPath := filepath.Join(c.path, MemoryMax)
+	memoryLimitStr := fmt.Sprintf("%d", memoryLimit)
+	if err := os.WriteFile(memoryMaxPath, []byte(memoryLimitStr), 0644); err != nil {
+		logger.Error("Error writing memory limit to cgroup: %v", err)
+		return fmt.Errorf("failed to write memory limit to cgroup: %w", err)
 	}
 	return nil
 }
@@ -107,4 +120,40 @@ func ParseCPUs(cpusStr string) (int, int, error) {
 	}
 
 	return quota, CpuPeriod, nil
+}
+
+// ParseMemory 解析字符串形式的内存值，并返回内存大小（单位为字节）
+// memoryLimit的格式可以是 "50m"、"100M"、"1G" 等。
+func ParseMemory(memoryLimit string) (int, error) {
+	if len(memoryLimit) == 0 {
+		return 0, fmt.Errorf("memory limit cannot be empty")
+	}
+
+	unit := memoryLimit[len(memoryLimit)-1]
+	numStr := memoryLimit[:len(memoryLimit)-1]
+
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse memory limit: %w", err)
+	}
+
+	if num <= 0 {
+		return 0, fmt.Errorf("memory limit must be greater than 0")
+	}
+
+	var multiplier int
+	switch unit {
+	case 'b', 'B':
+		multiplier = 1
+	case 'k', 'K':
+		multiplier = 1024
+	case 'm', 'M':
+		multiplier = 1024 * 1024
+	case 'g', 'G':
+		multiplier = 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("unsupported memory unit: %c", unit)
+	}
+
+	return num * multiplier, nil
 }

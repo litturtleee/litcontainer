@@ -102,12 +102,16 @@ func UmountOverlayFS(containerID string) error {
 		}
 	}
 
+	if err := os.RemoveAll(mountPoint); err != nil {
+		logger.Warn("Failed to remove mountPoint directory [%v]: %v", mountPoint, err)
+	}
+
 	logger.Debug("Umount overlayfs success, mountPoint: %v", mountPoint)
 	return nil
 }
 
 func GetMountPoint(containerID string) string {
-	return filepath.Join(DefaultOverlayFsDir, containerID)
+	return filepath.Join(DefaultOverlayFsDir, containerID, "merged")
 }
 
 // RemoveOverlayFS 删除 overlay 文件系统

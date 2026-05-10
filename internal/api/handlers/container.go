@@ -22,7 +22,7 @@ func NewContainerHandler(daemon *daemon.Daemon) *ContainerHandler {
 	}
 }
 
-// Create 创建容器
+// CreateContainer 创建容器
 func (h *ContainerHandler) CreateContainer(c *gin.Context) {
 	var req types.ContainerCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -148,12 +148,12 @@ func (h *ContainerHandler) InspectContainer(c *gin.Context) {
 	if !ok {
 		return
 	}
-	containerCfg, err := h.daemon.ContainerInspect(id)
+	containerInfo, err := h.daemon.ContainerInspect(id)
 	if err != nil {
 		responseError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, types.Success(types.ApiVersionV1, containerCfg, nil))
+	c.JSON(http.StatusOK, types.Success(types.ApiVersionV1, containerInfo, nil))
 }
 
 func (h *ContainerHandler) LogsContainer(c *gin.Context) {

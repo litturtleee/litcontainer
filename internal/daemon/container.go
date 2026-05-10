@@ -7,8 +7,11 @@ import (
 	"litcontainer/internal/filesys"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
+	"litcontainer/internal/shim"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -87,65 +90,122 @@ func (d *Daemon) ContainerStart(idOrName string) error {
 	if cfg.TTY {
 		return fmt.Errorf("tty not supported")
 	}
+	// 初始化网络（网络不下放给shim，属于docker业务，shim只负责容器的生命周期管理）
+	var netnsPath string
+	if cfg.Network != "" {
+		netnsPath, err = network.CreateNetns(id)
+		if err != nil {
+			logger.Error("Create netns failed, err: %v", err)
+			return err
+		}
+		success := false
+		defer func() {
+			if !success {
+				network.RemoveNetns(id)
+			}
+		}()
+		ip, err := d.netCtrl.Connect(cfg.Network, &network.ContainerEndpointConfig{
+			ID:           id,
+			PortMappings: cfg.PortMappings,
+		})
+		if err != nil {
+			logger.Error("Connect network failed, err: %v", err)
+			return err
+		}
+		cfg.IpAddress = ip.String()
+		success = true
+	}
+
+	// create的时候不会初始化网络，这里初始化了要更新，这样容器ioc启动可以从net的path里拿到想要的内容
+	spec := configToSpec(cfg)
+	if netnsPath != "" {
+		for _, ns := range spec.Linux.Namespaces {
+			if ns.Type == "network" {
+				ns.Path = netnsPath
+				break
+			}
+		}
+	}
+	if err := writeSpec(id, spec); err != nil {
+		logger.Error("Write spec failed, err: %v", err)
+		return err
+	}
+
 	if cfg.State != container.CreatedState && cfg.State != container.StoppedState {
 		logger.Error("Container %s is not in created or stopped state", id)
 		return fmt.Errorf("container %s is not in created or stopped state", id)
 	}
-	// 启动容器
-	initCmd, writePipe, err := NewInitProcess(cfg)
-	if err != nil {
-		logger.Error("New init process failed, err: %v", err)
-		return err
+
+	// 准备shim socket目录
+	socketPath := shim.SocketPath(id)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		logger.Error("Failed to create socket dir: %v", err)
+		return fmt.Errorf("failed to create shim socket dir: %w", err)
 	}
 
-	// 保证子进程有错误清理
-	success := false
-	defer func() {
-		if !success {
-			initCmd.Process.Kill()
+	// 调用shim
+	bundleDir := filepath.Join(container.DefaultLitContainerDir, id)
+	// ready pipe传递给shim，shim启动完成后会写入ready pipe，daemon在这里等待
+	shimReadyR, shimReadyW, err := os.Pipe()
+	if err != nil {
+		logger.Error("Failed to create ready pipe: %v", err)
+		return fmt.Errorf("failed to create ready pipe: %w", err)
+	}
+	defer shimReadyR.Close()
+	shimCmd := exec.Command("litcontainer-shim",
+		"--bundle", bundleDir,
+		"--id", id,
+		"--socket", socketPath,
+		"--ready-fd", "3",
+	)
+	shimCmd.ExtraFiles = []*os.File{shimReadyW}
+	// dup前的日志会打到daemon里，dup后的日志会打到shim.log里
+	shimCmd.Stdout = os.Stdout
+	shimCmd.Stderr = os.Stderr
+
+	if err := shimCmd.Start(); err != nil {
+		shimReadyW.Close()
+		return fmt.Errorf("failed to start shim: %w", err)
+	}
+	// 子进程已经有了写端的副本了,如果这里不关，shim异常下面就没办法读到EOF（需要等待5s超时）
+	shimReadyW.Close()
+
+	//
+	go func() {
+		if err := shimCmd.Wait(); err != nil {
+			logger.Warn("first-gen shim wait: %v", err)
 		}
 	}()
 
-	// 配置cgroup
-	cg, err := SetupCGroup(initCmd.Process.Pid, cfg.ID, cfg.CPULimit, cfg.MemoryLimit)
-	if err != nil {
-		logger.Error("Setup cgroup failed, err: %v", err)
-		return err
+	// 等待shim启动完成,读pipe
+	// 设置超时时间
+	if err := shimReadyR.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		logger.Error("Failed to set read deadline: %v", err)
+	}
+	buf := make([]byte, 16)
+	n, err := shimReadyR.Read(buf)
+	if err != nil || !strings.Contains(string(buf[:n]), "READY") {
+		// 尽力杀掉可能存在的第二代（通过 shim.pid 文件）
+		shimDir := filepath.Join(shim.DefaultShimRoot, id)
+		if pidBytes, e := os.ReadFile(filepath.Join(shimDir, "shim.pid")); e == nil {
+			if pid, e := strconv.Atoi(strings.TrimSpace(string(pidBytes))); e == nil && pid > 0 {
+				if e := syscall.Kill(pid, syscall.SIGKILL); e != nil && !errors.Is(e, syscall.ESRCH) {
+					logger.Warn("kill shim %d: %v", pid, e)
+				}
+			}
+		}
+		os.RemoveAll(shimDir)
+		os.Remove(socketPath)
+		logger.Error("Shim not ready, output: %q, err: %v", string(buf[:n]), err)
+		return fmt.Errorf("shim not ready: read=%q err=%w", string(buf[:n]), err)
 	}
 
-	// 配置网络
-	var ipAddr string
-	if cfg.Network != "" {
-		epCfg := &network.ContainerEndpointConfig{
-			ID:           cfg.ID,
-			Pid:          initCmd.Process.Pid,
-			IPAddress:    cfg.IpAddress,
-			PortMappings: cfg.PortMappings,
-		}
-		ip, err := d.netCtrl.Connect(cfg.Network, epCfg)
-		if err != nil {
-			logger.Error("Failed to connect network: %v", err)
-			return err
-		}
-		ipAddr = ip.String()
-	}
-
-	// 将配置发送给init进程
-	if err := SendInitConfig(writePipe, cfg); err != nil {
-		logger.Error("Send init config failed, err: %v", err)
-		return err
-	}
+	logger.Info("Shim for container %s is ready", id)
 
 	// 更新config
 	d.mu.Lock()
-	cfg.Pid = initCmd.Process.Pid
-	if ipAddr != "" {
-		cfg.IpAddress = ipAddr
-	}
 	cfg.State = container.RunningState
 	cfg.UpdateAt = time.Now().Format(time.DateTime)
-	state.Cmd = initCmd
-	state.CGroup = cg
 	state.done = make(chan struct{})
 	d.mu.Unlock()
 
@@ -156,10 +216,8 @@ func (d *Daemon) ContainerStart(idOrName string) error {
 	}
 
 	// 起goroutine 监控容器
-	go d.waitContainer(state)
-	success = true
+	go d.waitContainerBySocket(state)
 	return nil
-
 }
 
 // ContainerWait 等待容器结束
@@ -194,26 +252,20 @@ func (d *Daemon) ContainerStop(idOrName string, timeout time.Duration) error {
 		return container.ErrContainerNotRunning
 	}
 
-	// 1.发送SIGTERM
-	if err := state.Cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		logger.Error("Failed to send SIGTERM to container: %v", err)
+	// shim stop
+	shimClient := shim.NewShimClient(id)
+	if err := shimClient.Stop(int(syscall.SIGTERM), int(timeout.Seconds())); err != nil {
+		logger.Error("Failed to stop container via shim, err: %v", err)
 		return err
 	}
 
-	// 2.等done，超时则SIGKILL
-	select {
-	case <-state.done:
-		return nil
-	case <-time.After(timeout):
-		logger.Warn("Stop container %s timeout", id)
-		state.Cmd.Process.Kill()
-		// 等cleanup完成
-		<-state.done
-		return nil
-	}
+	// 等daemon自己的cleanup
+	<-state.done
+	return nil
 }
 
 // ContainerKill 杀死容器
+// Kill异步，不等容器退出，直接返回
 func (d *Daemon) ContainerKill(idOrName string, signal syscall.Signal) error {
 	id, err := d.resolveID(idOrName)
 	if err != nil {
@@ -228,7 +280,9 @@ func (d *Daemon) ContainerKill(idOrName string, signal syscall.Signal) error {
 	if state.Config.State != container.RunningState {
 		return container.ErrContainerNotRunning
 	}
-	return state.Cmd.Process.Signal(signal)
+
+	// shim kill
+	return shim.NewShimClient(id).Kill(int(signal))
 }
 
 // ContainerRemove 删除容器
@@ -273,29 +327,70 @@ func (d *Daemon) ContainerRemove(idOrName string, force bool) error {
 }
 
 // ContainerList 列出容器
-func (d *Daemon) ContainerList() []*container.Config {
+func (d *Daemon) ContainerList() []*container.Info {
 	d.mu.RLock()
-	defer d.mu.RUnlock()
-	out := make([]*container.Config, 0, len(d.containers))
-	for _, state := range d.containers {
-		out = append(out, state.Config)
+	cfgs := make([]container.Config, 0, len(d.containers))
+	for _, s := range d.containers {
+		// 拷贝一份config，避免读写冲突
+		cfgs = append(cfgs, *s.Config)
+	}
+	d.mu.RUnlock()
+
+	out := make([]*container.Info, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		info := &container.Info{
+			Config: &cfg,
+		}
+		if cfg.State == container.RunningState {
+			if data, err := shim.NewShimClient(cfg.ID).State(); err != nil {
+				logger.Warn("list: query shim state failed for %s: %v", cfg.ID, err)
+			} else {
+				info.RuntimeState = &container.RuntimeState{
+					Pid:      data.Pid,
+					Status:   data.Status,
+					ExitCode: data.Exit,
+				}
+			}
+		}
+		out = append(out, info)
 	}
 	return out
 }
 
 // ContainerInspect 获取容器信息
-func (d *Daemon) ContainerInspect(idOrName string) (*container.Config, error) {
+func (d *Daemon) ContainerInspect(idOrName string) (*container.Info, error) {
 	id, err := d.resolveID(idOrName)
 	if err != nil {
 		logger.Error("Resolve id failed, err: %v", err)
 		return nil, err
 	}
 
-	state, ok := d.lookup(id)
+	d.mu.RLock()
+	state, ok := d.containers[id]
 	if !ok {
+		d.mu.RUnlock()
 		return nil, container.ErrContainerNotFound
 	}
-	return state.Config, nil
+	cfgCopy := *state.Config
+	d.mu.RUnlock()
+
+	info := &container.Info{
+		Config: &cfgCopy,
+	}
+
+	// 只有running状态才通过shim获取pid和status，其他状态直接返回config里的状态就好
+	if cfgCopy.State == container.RunningState {
+		if data, err := shim.NewShimClient(id).State(); err != nil {
+			logger.Warn("inspect: query shim state failed for %s: %v", id, err)
+		} else {
+			info.RuntimeState = &container.RuntimeState{
+				Pid:      data.Pid,
+				Status:   data.Status,
+				ExitCode: data.Exit,
+			}
+		}
+	}
+	return info, nil
 }
 
 // ContainerLogs 获取容器日志
@@ -316,22 +411,23 @@ func (d *Daemon) ContainerLogs(idOrName string) ([]byte, error) {
 
 // --- 内部方法 ---
 
-func (d *Daemon) waitContainer(state *ContainerState) {
-	waitErr := state.Cmd.Wait()
-	if waitErr != nil {
-		logger.Error("container %s exited: %v, ProcessState: %+v, ExitCode: %d",
-			state.Config.ID, waitErr, state.Cmd.ProcessState, state.Cmd.ProcessState.ExitCode())
+func (d *Daemon) waitContainerBySocket(state *ContainerState) {
+	cli := shim.NewShimClient(state.Config.ID)
+	if _, err := cli.Wait(); err != nil {
+		logger.Error("waitContainerBySocket %s: %v", state.Config.ID, err)
 	}
 	d.cleanupContainer(state)
+
+	// 通知shim退出
+	if err := cli.Delete(); err != nil {
+		logger.Warn("shim delete %s: %v", state.Config.ID, err)
+	}
+
 	close(state.done)
 }
 
 func (d *Daemon) cleanupContainer(state *ContainerState) {
-	cg := state.CGroup
 	cfg := state.Config
-	if err := cg.Cleanup(); err != nil {
-		logger.Error("Failed to cleanup resource: %v", err)
-	}
 
 	if err := filesys.UmountOverlayFS(cfg.ID); err != nil {
 		logger.Error("Failed to umount overlayfs: %v", err)
@@ -341,11 +437,13 @@ func (d *Daemon) cleanupContainer(state *ContainerState) {
 		epCfg := &network.ContainerEndpointConfig{
 			ID:           cfg.ID,
 			IPAddress:    cfg.IpAddress,
-			Pid:          cfg.Pid,
 			PortMappings: cfg.PortMappings,
 		}
 		if err := d.netCtrl.Disconnect(cfg.Network, epCfg); err != nil {
 			logger.Error("Failed to disconnect network: %v", err)
+		}
+		if err := network.RemoveNetns(cfg.ID); err != nil {
+			logger.Error("Failed to remove network namespace: %v", err)
 		}
 	}
 
