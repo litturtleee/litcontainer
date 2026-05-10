@@ -11,19 +11,25 @@ import (
 )
 
 // printContainersInfo 输出所有容器信息
-func printContainersInfo(configs []*container.Config) error {
+func printContainersInfo(infos []*container.Info) error {
 	// 格式化输出
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tPID\tCOMMAND\tSTATE\tSTARTED_AT\tUPDATED_AT")
-	for _, config := range configs {
+	for _, info := range infos {
+		state := info.Config.State
+		pid := 0
+		if info.RuntimeState != nil {
+			state = info.RuntimeState.Status
+			pid = info.RuntimeState.Pid
+		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
-			config.ID[:12],
-			config.Name,
-			config.Pid,
-			strings.Join(config.Command, " "),
-			config.State,
-			config.CreatedAt,
-			config.UpdateAt,
+			info.Config.ID[:12],
+			info.Config.Name,
+			pid,
+			strings.Join(info.Config.Command, " "),
+			state,
+			info.Config.CreatedAt,
+			info.Config.UpdateAt,
 		)
 	}
 	if err := w.Flush(); err != nil {

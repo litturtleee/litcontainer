@@ -29,6 +29,9 @@ type Server struct {
 	exitCode int
 	doneCh   chan struct{} // close 时表示 init 已退出
 
+	deleteCh   chan struct{}
+	deleteOnce sync.Once
+
 	wg sync.WaitGroup
 }
 
@@ -39,6 +42,7 @@ func NewServer(id, runcPath string, initPid int, listener net.Listener) *Server 
 		initPid:  initPid,
 		listener: listener,
 		doneCh:   make(chan struct{}),
+		deleteCh: make(chan struct{}),
 	}
 }
 
@@ -100,6 +104,10 @@ func (s *Server) ExitCode() int {
 	return s.exitCode
 }
 
+func (s *Server) DeleteCh() <-chan struct{} {
+	return s.deleteCh
+}
+
 // Server 启动服务器，处理来自daemon的请求
 func (s *Server) Serve() {
 	for {
@@ -145,6 +153,9 @@ func (s *Server) handleConn(conn net.Conn) {
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20) // 设置最大消息长度为1MB
 	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			logger.Warn("read request: %v", err)
+		}
 		return
 	}
 
@@ -169,6 +180,10 @@ func (s *Server) dispatch(req *Request) *Response {
 		return s.handleStop(req.Args)
 	case CmdWait:
 		return s.handleWait()
+	case CmdKill:
+		return s.handleKill(req.Args)
+	case CmdDelete:
+		return s.handleDelete()
 	default:
 		return &Response{OK: false, Error: fmt.Sprintf("unknown command: %s", req.Cmd)}
 	}
@@ -201,8 +216,8 @@ func (s *Server) handleState() *Response {
 	}
 	s.mu.Unlock()
 
-	dateBytes, _ := json.Marshal(data)
-	return &Response{OK: true, Data: dateBytes}
+	dataBytes, _ := json.Marshal(data)
+	return &Response{OK: true, Data: dataBytes}
 }
 
 // handleStop 发送 SIGTERM 给 init 进程，优雅停止容器
@@ -226,8 +241,8 @@ func (s *Server) handleStop(rawArgs json.RawMessage) *Response {
 	case <-s.doneCh:
 		return &Response{OK: true}
 	default:
-		logger.Info("sending signal %d to init %d", args.Signal, s.initPid)
 	}
+	logger.Info("sending signal %d to init %d", args.Signal, s.initPid)
 
 	// 发送信号
 	if err := syscall.Kill(s.initPid, syscall.Signal(args.Signal)); err != nil {
@@ -244,6 +259,7 @@ func (s *Server) handleStop(rawArgs json.RawMessage) *Response {
 	case <-time.After(time.Duration(args.Timeout) * time.Second):
 		_ = syscall.Kill(s.initPid, syscall.SIGKILL)
 		<-s.doneCh
+		logger.Info("init did not exit after %d seconds, sent SIGKILL", args.Timeout)
 		return &Response{OK: true}
 	}
 }
@@ -258,4 +274,41 @@ func (s *Server) handleWait() *Response {
 		Exit:   s.exitCode,
 	})
 	return &Response{OK: true, Data: data}
+}
+
+// handleKill 发送指定信号给 init 进程
+// 没有超时，直接kill信号发送给init
+func (s *Server) handleKill(rawArgs json.RawMessage) *Response {
+	args := KillArgs{Signal: int(syscall.SIGKILL)}
+	if len(rawArgs) > 0 {
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return &Response{OK: false, Error: fmt.Sprintf("invalid kill args: %v", err)}
+		}
+		if args.Signal == 0 {
+			args.Signal = int(syscall.SIGKILL)
+		}
+	}
+
+	// init已退出
+	select {
+	case <-s.doneCh:
+		return &Response{OK: true}
+	default:
+		logger.Info("sending signal %d to init %d", args.Signal, s.initPid)
+	}
+
+	if err := syscall.Kill(s.initPid, syscall.Signal(args.Signal)); err != nil {
+		if err != syscall.ESRCH {
+			return &Response{OK: false, Error: fmt.Sprintf("kill init: %w", err)}
+		}
+	}
+	logger.Info("signal %d sent to init %d", args.Signal, s.initPid)
+	return &Response{OK: true}
+}
+
+func (s *Server) handleDelete() *Response {
+	s.deleteOnce.Do(func() {
+		close(s.deleteCh)
+	})
+	return &Response{OK: true}
 }

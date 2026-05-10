@@ -15,10 +15,6 @@ import (
 	"syscall"
 )
 
-const (
-	DefaultShimRoot = "/run/litcontainer/shim"
-)
-
 func init() {
 	logger.SetLevel(logger.DEBUG)
 	logger.SetIncludeTrace(true)
@@ -27,18 +23,25 @@ func init() {
 }
 
 func main() {
+	// detach 阶段
+	if os.Getenv("LIT_SHIM_DETACHED") != "1" {
+		detach()
+		return
+	}
+
 	// 解析参数
 	bundlePath := flag.String("bundle", "", "path to the bundle")
 	id := flag.String("id", "", "id of the container")
 	socketPath := flag.String("socket", "", "path to the socket")
 	logPath := flag.String("log", "", "path to the log")
 	runcPath := flag.String("runc", "litcontainer-runc", "path to the runc binary")
+	readyFd := flag.Int("ready-fd", -1, "fd to write READY signal (passed by daemon)")
 	flag.Parse()
 
 	if *bundlePath == "" || *id == "" || *socketPath == "" {
 		logger.Fatal("bundle, id, socket are required")
 	}
-	shimDir := filepath.Join(DefaultShimRoot, *id)
+	shimDir := filepath.Join(shim.DefaultShimRoot, *id)
 	if *logPath == "" {
 		*logPath = filepath.Join(shimDir, "shim.log")
 	}
@@ -52,11 +55,12 @@ func main() {
 		logger.Fatal("mkdir %s failed: %v", shimDir, err)
 	}
 
-	// 日志重定向
+	// 日志重定向(上面之前的日志会打到dameon里, 之后的日志会打到shim.log里)
 	logFile, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logger.Fatal("open log file: %v", err)
 	}
+	// 重定向dup日志
 	if err := syscall.Dup3(int(logFile.Fd()), int(os.Stdout.Fd()), 0); err != nil {
 		logger.Fatal("dup3 stdout: %v", err)
 	}
@@ -73,7 +77,7 @@ func main() {
 
 	// 创建socket
 	if err := os.Remove(*socketPath); err != nil && !os.IsNotExist(err) {
-		logger.Error("remove stale socket: %v", err)
+		logger.Fatal("remove stale socket: %v", err)
 	}
 	listener, err := net.Listen("unix", *socketPath)
 	if err != nil {
@@ -104,6 +108,8 @@ func main() {
 	}
 
 	if err := runcCreateCmd.Run(); err != nil {
+		listener.Close()
+		os.RemoveAll(*socketPath)
 		os.RemoveAll(shimDir)
 		logger.Fatal("runc create: %v", err)
 	}
@@ -125,13 +131,24 @@ func main() {
 	// runc start
 	runcStartCmd := exec.Command(*runcPath, "start", *id)
 	// runc的日志就重定向到shim里
-	runcStartCmd.Stdout, runcStartCmd.Stderr = logFile, logFile
+	runcStartCmd.Stdout, runcStartCmd.Stderr = containerLogFile, containerLogFile
 	if err := runcStartCmd.Run(); err != nil {
 		_ = exec.Command(*runcPath, "delete", *id).Run()
+		listener.Close()
+		os.Remove(*socketPath)
 		os.RemoveAll(shimDir)
 		logger.Fatal("runc start: %v", err)
 	}
 	logger.Info("container started, id: %s", *id)
+
+	// 通知daemon init已经启动
+	if *readyFd >= 0 {
+		f := os.NewFile(uintptr(*readyFd), "ready-fd")
+		if _, err := f.Write([]byte("READY\n")); err != nil {
+			logger.Error("write ready signal: %v", err)
+		}
+		f.Close()
+	}
 
 	// 启动server
 	srv := shim.NewServer(*id, *runcPath, initPID, listener)
@@ -141,6 +158,10 @@ func main() {
 	// 等init退出
 	<-srv.Done()
 	logger.Info("init exited code=%d, cleaning up", srv.ExitCode())
+
+	// 等dameon的delete命令
+	<-srv.DeleteCh()
+	logger.Info("delete command received, shutting down shim")
 
 	srv.Shutdown()
 
@@ -154,4 +175,25 @@ func main() {
 
 	logger.Info("shim exited, id: %s", *id)
 	return
+}
+
+func detach() {
+	cmd := exec.Command(os.Args[0], os.Args[1:]...)
+	cmd.Env = append(os.Environ(), "LIT_SHIM_DETACHED=1")
+
+	if readyFile := os.NewFile(3, "ready-fd"); readyFile != nil {
+		cmd.ExtraFiles = []*os.File{readyFile}
+	}
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// 启动孙子进程
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "shim detach: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 父进程正常退出
+	os.Exit(0)
 }

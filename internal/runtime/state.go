@@ -12,6 +12,7 @@ const (
 	StateRunning                = "running"
 	StateStopped                = "stopped"
 	StateCreated                = "created"
+	UnknownState                = "unknown"
 )
 
 // ContainerState 容器状态

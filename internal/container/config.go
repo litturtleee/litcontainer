@@ -14,7 +14,6 @@ type Config struct {
 	ID           string                `json:"id"`
 	Name         string                `json:"name"`
 	Image        string                `json:"image"`
-	Pid          int                   `json:"pid"`
 	Network      string                `json:"network"`
 	IpAddress    string                `json:"ipAddress"`
 	PortMappings []string              `json:"portMappings"`
@@ -27,6 +26,18 @@ type Config struct {
 	MemoryLimit  string                `json:"memoryLimit"`
 	CreatedAt    string                `json:"createdAt"`
 	UpdateAt     string                `json:"updateAt"`
+}
+
+type Info struct {
+	Config       *Config       `json:"config"`
+	RuntimeState *RuntimeState `json:"runtimeState"`
+}
+
+// RuntimeState shim运行时状态
+type RuntimeState struct {
+	Status   string `json:"status"`
+	Pid      int    `json:"pid,omitempty"`
+	ExitCode int    `json:"exitCode,omitempty"`
 }
 
 func NewContainerConfig(name, image, cpuLimit, memoryLimit, network string, cmd, envs, portMapping []string,

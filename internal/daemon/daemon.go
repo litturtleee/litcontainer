@@ -2,8 +2,9 @@ package daemon
 
 import (
 	"litcontainer/internal/container"
+	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
-	"os/exec"
+	"litcontainer/internal/shim"
 	"sync"
 )
 
@@ -16,7 +17,6 @@ type Daemon struct {
 
 type ContainerState struct {
 	Config *container.Config
-	Cmd    *exec.Cmd
 	done   chan struct{}
 }
 
@@ -32,10 +32,51 @@ func New(root string) (*Daemon, error) {
 		return nil, err
 	}
 
+	// 加载所有容器配置到内存
 	for _, cfg := range configs {
-		d.containers[cfg.ID] = &ContainerState{Config: cfg}
-		// 注意：state.Cmd 是 nil，state.done 是 nil
+		state := &ContainerState{
+			Config: cfg,
+			done:   closeChan(),
+		}
+		d.containers[cfg.ID] = state
 	}
-	// TODO(phase2): 通过 shim socket 重连真实运行状态
+
+	// reconcile: 对每个标记running的容器尝试重连shim
+	for _, state := range d.containers {
+		if state.Config.State != container.RunningState {
+			continue
+		}
+		d.reconcileContainer(state)
+	}
+
 	return d, nil
+}
+
+// --- 内部方法 ---
+func closeChan() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// reconcileContainer 尝试重连shim，重建对一个running容器的管控关系
+func (d *Daemon) reconcileContainer(state *ContainerState) {
+	logger.Info("Reconciling container %s", state.Config.ID)
+	id := state.Config.ID
+	cli := shim.NewShimClient(id)
+
+	data, err := cli.State()
+	if err != nil {
+		// shim不通, 容器已死或异常，跑通daemon端cleanup
+		logger.Warn("Failed to connect shim for container %s: %v", id, err)
+		d.cleanupContainer(state)
+		return
+	}
+
+	logger.Info("reconcile %s: shim alive, init pid=%d, status=%s", id, data.Pid, data.Status)
+	d.mu.Lock()
+	state.done = make(chan struct{})
+	d.mu.Unlock()
+
+	go d.waitContainerBySocket(state)
 }

@@ -148,12 +148,12 @@ func (h *ContainerHandler) InspectContainer(c *gin.Context) {
 	if !ok {
 		return
 	}
-	containerCfg, err := h.daemon.ContainerInspect(id)
+	containerInfo, err := h.daemon.ContainerInspect(id)
 	if err != nil {
 		responseError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, types.Success(types.ApiVersionV1, containerCfg, nil))
+	c.JSON(http.StatusOK, types.Success(types.ApiVersionV1, containerInfo, nil))
 }
 
 func (h *ContainerHandler) LogsContainer(c *gin.Context) {
