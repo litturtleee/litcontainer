@@ -22,6 +22,8 @@ func main() {
 	app.Version = version.AppVersion
 
 	app.Commands = []cli.Command{
+		cli2.CreateCommand,
+		cli2.StartCommand,
 		cli2.RunCommand,
 		cli2.ExportCommand,
 		cli2.PsCommand,

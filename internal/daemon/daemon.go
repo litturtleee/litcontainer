@@ -18,6 +18,7 @@ type Daemon struct {
 type ContainerState struct {
 	Config *container.Config
 	done   chan struct{}
+	opMu   sync.Mutex // opMu 用于保护对容器状态的修改，避免并发操作导致状态不一致
 }
 
 func New(root string) (*Daemon, error) {

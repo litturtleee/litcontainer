@@ -10,6 +10,71 @@ import (
 	"litcontainer/internal/logger"
 )
 
+var CreateCommand = cli.Command{
+	Name:  "create",
+	Usage: "Create a container without starting it",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{Name: "it", Usage: "Allocate a tty"},
+		&cli.StringFlag{Name: "name", Usage: "Assign a name to the container"},
+		&cli.StringFlag{Name: "m", Usage: "Memory limit, e.g., 100m 1g"},
+		&cli.StringFlag{Name: "cpus", Usage: "CPU limit, e.g., 1 1.5"},
+		&cli.StringSliceFlag{Name: "v", Usage: "Mount a volume"},
+		&cli.StringSliceFlag{Name: "e", Usage: "Set environment variables"},
+		&cli.StringFlag{Name: "net", Usage: "Assign a network"},
+		&cli.StringSliceFlag{Name: "p", Usage: "Publish container's port(s) to host"},
+	},
+	Action: func(c *cli.Context) error {
+		args := c.Args()
+		if len(args) < 2 {
+			return fmt.Errorf("create command needs at least two arguments (image + command), %w",
+				client.ErrInvalidArguments)
+		}
+		containerName := c.String("name")
+		if containerName == "" {
+			return fmt.Errorf("container name can not be empty, %w", client.ErrInvalidArguments)
+		}
+		mounts, err := parseMountVolume(c.StringSlice("v"))
+		if err != nil {
+			return err
+		}
+		cliCl := client.NewClient()
+		id, err := cliCl.ContainerCreate(types.ContainerCreateRequest{
+			Name:         containerName,
+			Image:        args[0],
+			Command:      args[1:],
+			Env:          c.StringSlice("e"),
+			Mounts:       mounts,
+			CPULimit:     c.String("cpus"),
+			MemoryLimit:  c.String("m"),
+			Network:      c.String("net"),
+			PortMappings: c.StringSlice("p"),
+			TTY:          c.Bool("it"),
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Println(id)
+		return nil
+	},
+}
+
+var StartCommand = cli.Command{
+	Name:  "start",
+	Usage: "Start one or more stopped (or created) containers",
+	Action: func(c *cli.Context) error {
+		if c.NArg() == 0 {
+			return fmt.Errorf("at least one container name or ID must be specified, %w", client.ErrInvalidArguments)
+		}
+		idOrName := c.Args().First()
+		cliCl := client.NewClient()
+		if err := cliCl.StartContainer(idOrName); err != nil {
+			return err
+		}
+		fmt.Println(idOrName)
+		return nil
+	},
+}
+
 var RunCommand = cli.Command{
 	Name:  "run",
 	Usage: "Run a container",
