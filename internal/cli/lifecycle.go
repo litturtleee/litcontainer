@@ -8,6 +8,7 @@ import (
 	"litcontainer/internal/client"
 	"litcontainer/internal/container"
 	"litcontainer/internal/logger"
+	"os"
 )
 
 var CreateCommand = cli.Command{
@@ -187,9 +188,8 @@ var RunCommand = cli.Command{
 		if err := cli.WaitContainer(id); err != nil {
 			return err
 		}
-		logs, _ := cli.LogsContainer(id)
-		fmt.Println(string(logs))
-		return nil
+
+		return cli.LogsContainerStream(id, false, os.Stdout, os.Stderr)
 	},
 }
 
@@ -224,17 +224,8 @@ var LogCommand = cli.Command{
 
 		follow := c.Bool("f")
 
-		if follow {
-			return fmt.Errorf("follow not support now")
-		}
-
 		cli := client.NewClient()
-		logs, err := cli.LogsContainer(containerIDOrName)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(logs))
-		return nil
+		return cli.LogsContainerStream(containerIDOrName, follow, os.Stdout, os.Stderr)
 	},
 }
 

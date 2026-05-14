@@ -6,6 +6,7 @@ import (
 	"litcontainer/internal/api/errdefs"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/daemon"
+	"litcontainer/internal/logger"
 	"net/http"
 	"strconv"
 	"syscall"
@@ -161,13 +162,21 @@ func (h *ContainerHandler) LogsContainer(c *gin.Context) {
 	if !ok {
 		return
 	}
-	logs, err := h.daemon.ContainerLogs(id)
+	follow := c.DefaultQuery("follow", "false") == "true"
+
+	// 设置为chunck HTTP 流
+	c.Header("Content-Type", "application/vnd.lit.raw-stream")
+
+	fw := &flushingWriter{w: c.Writer}
+
+	err := h.daemon.ContainerLogsStream(c.Request.Context(), id, follow, fw)
 	if err != nil {
+		if c.Writer.Written() {
+			logger.Warn("logs stream mid-error: %v", err)
+			return
+		}
 		responseError(c, err)
-		return
 	}
-	// JSON marshal的时候会把[]byte变成base64字符串, 所以用c.Data()
-	c.Data(http.StatusOK, "text/plain; charset=utf-8", logs)
 }
 
 // --- 内部方法 ---
@@ -194,4 +203,16 @@ func (h *ContainerHandler) parseSignal(signal string) (syscall.Signal, error) {
 	default:
 		return 0, fmt.Errorf("invalid signal: %s", signal)
 	}
+}
+
+// flushingWriter 包装 gin.ResponseWriter，每次 Write 后立即 Flush
+// 用途：保证 chunked HTTP 流的数据立刻送达 client（而不是等内部 buffer 满）
+type flushingWriter struct {
+	w gin.ResponseWriter
+}
+
+func (fw *flushingWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	fw.w.Flush()
+	return n, err
 }

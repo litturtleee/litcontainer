@@ -265,7 +265,7 @@ func setupContainer(spec *runtime.Spec, bundle, id, pidFile string) (*containerP
 	}
 	containerProcess.cleanup = runCleanups
 
-	// 1.mkfifo
+	// 1.mkfifo 用于发送start信号
 	fifoDir := filepath.Join(runtime.DefaultRuntimeStateRootPath, id)
 	if err := os.MkdirAll(fifoDir, 0755); err != nil {
 		return &containerProcess, fmt.Errorf("mkdir %s failed: %w", fifoDir, err)

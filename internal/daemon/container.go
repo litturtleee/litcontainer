@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"litcontainer/internal/container"
 	"litcontainer/internal/filesys"
 	"litcontainer/internal/logger"
@@ -361,20 +363,26 @@ func (d *Daemon) ContainerInspect(idOrName string) (*container.Info, error) {
 	return info, nil
 }
 
-// ContainerLogs 获取容器日志
-func (d *Daemon) ContainerLogs(idOrName string) ([]byte, error) {
+// ContainerLogsStream 获取容器日志
+func (d *Daemon) ContainerLogsStream(ctx context.Context, idOrName string, follow bool, w io.Writer) error {
 	id, err := d.resolveID(idOrName)
 	if err != nil {
 		logger.Error("Resolve id failed, err: %v", err)
-		return nil, err
+		return err
 	}
-
 	state, ok := d.lookup(id)
 	if !ok {
-		return nil, container.ErrContainerNotFound
+		return container.ErrContainerNotFound
 	}
-	path := filepath.Join(container.DefaultLitContainerDir, state.Config.ID, container.DefaultContainerLogFileName)
-	return os.ReadFile(path)
+
+	path := filepath.Join(container.DefaultLitContainerDir, id, container.DefaultContainerLogFileName)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return d.tailLog(ctx, state, f, follow, w)
 }
 
 // --- 内部方法 ---
@@ -587,4 +595,56 @@ func (d *Daemon) startShim(state *ContainerState) error {
 	}
 	logger.Info("Shim for container %s is ready", id)
 	return nil
+}
+
+func (d *Daemon) tailLog(ctx context.Context, state *ContainerState, f *os.File, follow bool, w io.Writer) error {
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if errors.Is(rerr, io.EOF) {
+			if !follow {
+				return nil
+			}
+			// 简单实现,每隔200ms读取一次日志
+			// 如果停止了则最后读一次
+			if d.getState(state) != container.RunningState {
+				d.drainLog(f, w, buf)
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(200 * time.Millisecond):
+			}
+			continue
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
+}
+
+func (d *Daemon) drainLog(f *os.File, w io.Writer, buf []byte) {
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil || n == 0 {
+			return
+		}
+	}
+}
+
+func (d *Daemon) getState(state *ContainerState) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return state.Config.State
 }

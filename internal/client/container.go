@@ -5,6 +5,7 @@ import (
 	"io"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/container"
+	"litcontainer/internal/stdcopy"
 	"net/http"
 	"strconv"
 )
@@ -60,15 +61,22 @@ func (c *Client) InspectContainer(idOrName string) (*container.Info, error) {
 	return containerInfo, err
 }
 
-func (c *Client) LogsContainer(idOrName string) ([]byte, error) {
-	req, _ := http.NewRequest("GET", "http://x/api/v1/containers/"+idOrName+"/logs", nil)
+func (c *Client) LogsContainerStream(idOrName string, follow bool, stdout, stderr io.Writer) error {
+	path := "http://x/api/v1/containers/" + idOrName + "/logs"
+	if follow {
+		path += "?follow=true"
+	}
+	// 不用内部的do方法, 因为这里要用raw stream
+	req, _ := http.NewRequest("GET", path, nil)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, ErrDaemonUnreachable
+		return fmt.Errorf("logs request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("logs failed, status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("logs failed (status %d): %s", resp.StatusCode, string(body))
 	}
-	return io.ReadAll(resp.Body)
+	return stdcopy.Demux(resp.Body, stdout, stderr)
 }
