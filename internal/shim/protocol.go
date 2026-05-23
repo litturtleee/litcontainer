@@ -8,6 +8,7 @@ const (
 	CmdWait   = "wait"
 	CmdKill   = "kill"
 	CmdDelete = "delete"
+	CmdExec   = "exec"
 )
 
 type Request struct {
@@ -28,6 +29,12 @@ type StopArgs struct {
 
 type KillArgs struct {
 	Signal int `json:"signal"` // 信号
+}
+
+type ExecArgs struct {
+	Cmd []string `json:"cmd"` // 命令和参数
+	Env []string `json:"env"` // 环境变量
+	Cwd string   `json:"cwd"` // 工作目录
 }
 
 type StateData struct {

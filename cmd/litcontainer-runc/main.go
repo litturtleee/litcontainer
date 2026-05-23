@@ -58,6 +58,7 @@ func main() {
 		cli2.RuntimeCreateCommand,
 		cli2.RuntimeStartCommand,
 		cli2.RuntimeDeleteCommand,
+		cli2.RuntimeExecContainerCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

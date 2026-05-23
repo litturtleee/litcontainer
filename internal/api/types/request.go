@@ -25,3 +25,9 @@ type ImageExportRequest struct {
 	ContainerName string `json:"containerName" binding:"required"`
 	OutputName    string `json:"outputName" binding:"required"`
 }
+
+type ExecRequest struct {
+	Cmd []string `json:"cmd" binding:"required"`
+	Env []string `json:"env" binding:"omitempty"`
+	Cwd string   `json:"cwd" binding:"omitempty"`
+}

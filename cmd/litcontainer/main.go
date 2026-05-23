@@ -29,7 +29,6 @@ func main() {
 		cli2.PsCommand,
 		cli2.LogCommand,
 		cli2.ExecCommand,
-		cli2.ExecContainerCommand,
 		cli2.StopContainerCommand,
 		cli2.RemoveContainerCommand,
 		cli2.InspectContainerCommand,

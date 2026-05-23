@@ -1,15 +1,18 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"litcontainer/internal/api/types"
 	"litcontainer/internal/container"
 	"litcontainer/internal/filesys"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
 	"litcontainer/internal/shim"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -383,6 +386,32 @@ func (d *Daemon) ContainerLogsStream(ctx context.Context, idOrName string, follo
 	defer f.Close()
 
 	return d.tailLog(ctx, state, f, follow, w)
+}
+
+// ContainerExec 在容器内执行命令
+func (d *Daemon) ContainerExec(idOrName string, req types.ExecRequest, clientConn net.Conn,
+	clientReader *bufio.Reader) error {
+	id, err := d.resolveID(idOrName)
+	if err != nil {
+		logger.Error("Resolve id failed, err: %v", err)
+		return err
+	}
+	state, ok := d.lookup(id)
+	if !ok {
+		return container.ErrContainerNotFound
+	}
+	if state.Config.State != container.RunningState {
+		return container.ErrContainerNotRunning
+	}
+	if len(req.Cmd) == 0 {
+		return fmt.Errorf("exec: empty command")
+	}
+
+	return shim.NewShimClient(id).Exec(shim.ExecArgs{
+		Cmd: req.Cmd,
+		Env: req.Env,
+		Cwd: req.Cwd,
+	}, clientReader, clientConn)
 }
 
 // --- 内部方法 ---

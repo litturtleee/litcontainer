@@ -1,11 +1,13 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/container"
 	"litcontainer/internal/stdcopy"
+	"net"
 	"net/http"
 	"strconv"
 )
@@ -79,4 +81,43 @@ func (c *Client) LogsContainerStream(idOrName string, follow bool, stdout, stder
 		return fmt.Errorf("logs failed (status %d): %s", resp.StatusCode, string(body))
 	}
 	return stdcopy.Demux(resp.Body, stdout, stderr)
+}
+
+func (c *Client) ExecContainer(idOrName string, req types.ExecRequest, stdin io.Reader,
+	stdout, stderr io.Writer) (int, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return -1, fmt.Errorf("marshal request: %w", err)
+	}
+
+	conn, br, err := c.openStream("POST", "/api/v1/containers/"+idOrName+"/exec", body)
+	if err != nil {
+		return -1, err
+	}
+	defer conn.Close()
+
+	// 读握手 JSON
+	handshakeLine, err := br.ReadBytes('\n')
+	if err != nil {
+		return -1, fmt.Errorf("read handshake: %w", err)
+	}
+	var handshake struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(handshakeLine, &handshake); err != nil {
+		return -1, fmt.Errorf("parse handshake: %w", err)
+	}
+	if !handshake.OK {
+		return -1, fmt.Errorf("exec rejected: %s", handshake.Error)
+	}
+
+	go func() {
+		_, _ = io.Copy(conn, stdin)
+		if uc, ok := conn.(*net.UnixConn); ok {
+			uc.CloseWrite()
+		}
+	}()
+
+	return stdcopy.DemuxExec(br, stdout, stderr)
 }

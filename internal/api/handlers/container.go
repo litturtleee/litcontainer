@@ -179,6 +179,49 @@ func (h *ContainerHandler) LogsContainer(c *gin.Context) {
 	}
 }
 
+func (h *ContainerHandler) ExecContainer(c *gin.Context) {
+	id, ok := h.checkParamId(c)
+	if !ok {
+		return
+	}
+
+	var req types.ExecRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, types.Error(errdefs.ErrInvalidParameter, err.Error(), err.Error()))
+		return
+	}
+
+	// 将http连接升级为hijack连接
+	hijacker, ok := c.Writer.(http.Hijacker)
+	if !ok {
+		c.JSON(http.StatusInternalServerError,
+			types.Error(errdefs.ErrInternalServerError, "hijack not supported",
+				"the server does not support hijacking"))
+		return
+	}
+	conn, bufioRw, err := hijacker.Hijack()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError,
+			types.Error(errdefs.ErrInternalServerError, "hijack failed",
+				fmt.Sprintf("failed to hijack connection: %v", err)))
+		return
+	}
+	defer conn.Close()
+
+	// hijack后, gin不再响应，手动通知client握手成功，发送200响应行和Content-Type头，告知client后续是exec-stream
+	if _, err := conn.Write([]byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: application/vnd.lit.exec-stream\r\n\r\n")); err != nil {
+		logger.Warn("exec: write 200 line: %v", err)
+		return
+	}
+
+	if err := h.daemon.ContainerExec(id, req, conn, bufioRw.Reader); err != nil {
+		errJSON := fmt.Sprintf(`{"ok":false,"error":%q}`+"\n", err.Error())
+		_, _ = conn.Write([]byte(errJSON))
+		logger.Warn("exec: %v", err)
+	}
+}
+
 // --- 内部方法 ---
 func (h *ContainerHandler) checkParamId(c *gin.Context) (string, bool) {
 	id := c.Param("id")

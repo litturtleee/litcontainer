@@ -6,9 +6,9 @@ import (
 	"github.com/urfave/cli"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/client"
-	"litcontainer/internal/container"
 	"litcontainer/internal/logger"
 	"os"
+	"strings"
 )
 
 var CreateCommand = cli.Command{
@@ -229,42 +229,54 @@ var LogCommand = cli.Command{
 	},
 }
 
-// todo:没改
 var ExecCommand = cli.Command{
-	Name:  "exec",
-	Usage: "Execute a command in a running container",
+	Name:      "exec",
+	Usage:     "Execute a command in a running container",
+	ArgsUsage: "<container> <command> [args...]",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{
-			Name:  "it",
-			Usage: "Run in interactive mode",
+		&cli.StringSliceFlag{
+			Name:  "e",
+			Usage: "Set environment variables, e.g., -e KEY=VAL",
+		},
+		&cli.StringFlag{
+			Name:  "w",
+			Usage: "Working directory inside container (default /)",
 		},
 	},
 	Action: func(c *cli.Context) error {
-		if len(c.Args()) < 2 {
-			return fmt.Errorf("usage: litcontainer exec [-it] <name> <command> [args...], %w",
+		args := c.Args()
+		if len(args) < 2 {
+			return fmt.Errorf("usage: litcontainer exec [-e KEY=VAL] [-w cwd] <container> <command> [args...], %w",
 				client.ErrInvalidArguments)
 		}
-		enableTTY := c.Bool("it")
-		containerName := c.Args().Get(0)
-		args := c.Args()[1:]
+		idOrName := args[0]
+		cmd := args[1:]
+		env := c.StringSlice("e")
+		cwd := c.String("w")
 
-		if err := container.Exec(enableTTY, containerName, args); err != nil {
-			logger.Error("exec command error: %v", err)
+		// 兜底 PATH，防止 exec-container 的 LookPath 找不到命令
+		hasPath := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "PATH=") {
+				hasPath = true
+				break
+			}
+		}
+		if !hasPath {
+			env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		}
+
+		cliCl := client.NewClient()
+		exitCode, err := cliCl.ExecContainer(idOrName, types.ExecRequest{
+			Cmd: cmd,
+			Env: env,
+			Cwd: cwd,
+		}, os.Stdin, os.Stdout, os.Stderr)
+		if err != nil {
 			return err
 		}
-		return nil
-	},
-}
-
-// todo:没改
-var ExecContainerCommand = cli.Command{
-	Name:   "exec-container",
-	Usage:  "Execute a command in a running container, Do not call it outside",
-	Hidden: true,
-	Action: func(c *cli.Context) error {
-		if err := container.ExecContainer(c.Args()); err != nil {
-			logger.Error("exec-container command error: %v", err)
-			return err
+		if exitCode != 0 {
+			os.Exit(exitCode)
 		}
 		return nil
 	},

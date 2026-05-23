@@ -72,6 +72,7 @@ func SetupRoutes(r *gin.Engine, d *daemon.Daemon) {
 			containers.GET("/list", containerHandler.ListContainers)
 			containers.GET("/:id", containerHandler.InspectContainer)
 			containers.GET("/:id/logs", containerHandler.LogsContainer)
+			containers.POST("/:id/exec", containerHandler.ExecContainer)
 		}
 	}
 	// 镜像相关路由

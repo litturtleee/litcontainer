@@ -10,6 +10,7 @@ import (
 const (
 	OciVersion          = "1.0.0-litcontainer"
 	DefaultSpecFileName = "config.json"
+	ExecPidEnv          = "LITCONTAINER_EXEC_PID"
 )
 
 // Spec 运行时规范
