@@ -8,6 +8,7 @@ import (
 	"io"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/container"
+	"litcontainer/internal/events"
 	"litcontainer/internal/filesys"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
@@ -97,6 +98,7 @@ func (d *Daemon) ContainerCreate(opts *CreateOptions) (string, error) {
 		Config: containerConfig,
 	}
 	d.mu.Unlock()
+	d.publishCreate(containerConfig)
 	return containerConfig.ID, nil
 }
 
@@ -172,6 +174,7 @@ func (d *Daemon) ContainerStart(idOrName string) error {
 
 	// 起goroutine 监控容器
 	go d.waitContainerBySocket(state)
+	d.publishStart(id)
 	success = true
 	return nil
 }
@@ -294,6 +297,8 @@ func (d *Daemon) ContainerRemove(idOrName string, force bool) error {
 	d.mu.Lock()
 	delete(d.containers, id)
 	d.mu.Unlock()
+
+	d.publishDestroy(id)
 
 	logger.Info("Removed container %s", id)
 	return nil
@@ -418,7 +423,8 @@ func (d *Daemon) ContainerExec(idOrName string, req types.ExecRequest, clientCon
 
 func (d *Daemon) waitContainerBySocket(state *ContainerState) {
 	cli := shim.NewShimClient(state.Config.ID)
-	if _, err := cli.Wait(); err != nil {
+	data, err := cli.Wait()
+	if err != nil {
 		logger.Error("waitContainerBySocket %s: %v", state.Config.ID, err)
 	}
 	d.cleanupContainer(state)
@@ -427,6 +433,12 @@ func (d *Daemon) waitContainerBySocket(state *ContainerState) {
 	if err := cli.Delete(); err != nil {
 		logger.Warn("shim delete %s: %v", state.Config.ID, err)
 	}
+
+	exitCode := -1
+	if data != nil {
+		exitCode = data.Exit
+	}
+	d.publishDie(state.Config.ID, exitCode)
 
 	close(state.done)
 }
@@ -676,4 +688,40 @@ func (d *Daemon) getState(state *ContainerState) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return state.Config.State
+}
+
+// --- 事件发布 ---
+func (d *Daemon) publishCreate(cfg *container.Config) {
+	d.eventBus.Publish(events.Event{
+		Type:        events.EventCreate,
+		ContainerId: cfg.ID,
+		Attrs: map[string]string{
+			"name":  cfg.Name,
+			"image": cfg.Image,
+		},
+	})
+}
+
+func (d *Daemon) publishStart(id string) {
+	d.eventBus.Publish(events.Event{
+		Type:        events.EventStart,
+		ContainerId: id,
+	})
+}
+
+func (d *Daemon) publishDie(id string, exitCode int) {
+	d.eventBus.Publish(events.Event{
+		Type:        events.EventDie,
+		ContainerId: id,
+		Attrs: map[string]string{
+			"exitCode": strconv.Itoa(exitCode),
+		},
+	})
+}
+
+func (d *Daemon) publishDestroy(id string) {
+	d.eventBus.Publish(events.Event{
+		Type:        events.EventDestroy,
+		ContainerId: id,
+	})
 }

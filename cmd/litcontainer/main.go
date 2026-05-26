@@ -33,6 +33,7 @@ func main() {
 		cli2.RemoveContainerCommand,
 		cli2.InspectContainerCommand,
 		cli2.NetworkCommands,
+		cli2.EventsCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

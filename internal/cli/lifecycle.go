@@ -6,9 +6,11 @@ import (
 	"github.com/urfave/cli"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/client"
+	"litcontainer/internal/events"
 	"litcontainer/internal/logger"
 	"os"
 	"strings"
+	"time"
 )
 
 var CreateCommand = cli.Command{
@@ -356,5 +358,28 @@ var InspectContainerCommand = cli.Command{
 		configByte, _ := json.Marshal(inspectContainer)
 		fmt.Println(string(configByte))
 		return nil
+	},
+}
+
+var EventsCommand = cli.Command{
+	Name:  "events",
+	Usage: "Steam container events",
+	Action: func(c *cli.Context) error {
+		cli := client.NewClient()
+		return cli.EventsStream(func(e events.Event) error {
+			id := e.ContainerId
+			if len(id) > 12 {
+				id = id[:12]
+			}
+			fmt.Printf("%s  container  %-8s  %s",
+				e.Time.Format(time.RFC3339),
+				e.Type,
+				id)
+			for k, v := range e.Attrs {
+				fmt.Printf("  %s=%s", k, v)
+			}
+			fmt.Println()
+			return nil
+		})
 	},
 }
