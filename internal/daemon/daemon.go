@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"litcontainer/internal/container"
+	"litcontainer/internal/events"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/network"
 	"litcontainer/internal/shim"
@@ -13,11 +14,13 @@ type Daemon struct {
 	containers map[string]*ContainerState
 	netCtrl    *network.Controller
 	root       string
+	eventBus   *events.EventBus
 }
 
 type ContainerState struct {
 	Config *container.Config
 	done   chan struct{}
+	opMu   sync.Mutex // opMu 用于保护对容器状态的修改，避免并发操作导致状态不一致
 }
 
 func New(root string) (*Daemon, error) {
@@ -25,6 +28,7 @@ func New(root string) (*Daemon, error) {
 		containers: make(map[string]*ContainerState),
 		netCtrl:    network.GetController(),
 		root:       root,
+		eventBus:   events.NewEventBus(),
 	}
 
 	configs, err := container.GetAllConfig()
@@ -50,6 +54,10 @@ func New(root string) (*Daemon, error) {
 	}
 
 	return d, nil
+}
+
+func (d *Daemon) GetEventBus() *events.EventBus {
+	return d.eventBus
 }
 
 // --- 内部方法 ---

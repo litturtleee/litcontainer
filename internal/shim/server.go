@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"litcontainer/internal/logger"
 	"litcontainer/internal/runtime"
+	"litcontainer/internal/stdcopy"
 	"net"
 	"os"
 	"os/exec"
@@ -142,26 +144,34 @@ func (s *Server) writeResponse(conn net.Conn, resp Response) error {
 		logger.Error("marshal response: %v", err)
 		return err
 	}
+	// 加个换行符作为结束符
 	rspByte = append(rspByte, '\n')
 	_, err = conn.Write(rspByte)
 	return err
 }
 
 func (s *Server) handleConn(conn net.Conn) {
+	// 处理完请求后会关闭连接，客户端从这里感知
 	defer conn.Close()
 
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 4096), 1<<20) // 设置最大消息长度为1MB
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
 			logger.Warn("read request: %v", err)
 		}
 		return
 	}
 
 	var req Request
-	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+	if err := json.Unmarshal(line, &req); err != nil {
 		s.writeResponse(conn, Response{OK: false, Error: fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+
+	// exec命令单独处理
+	if req.Cmd == CmdExec {
+		s.handleExec(conn, reader, req.Args)
 		return
 	}
 
@@ -311,4 +321,109 @@ func (s *Server) handleDelete() *Response {
 		close(s.deleteCh)
 	})
 	return &Response{OK: true}
+}
+
+func (s *Server) handleExec(conn net.Conn, reader *bufio.Reader, rawArgs json.RawMessage) {
+	var args ExecArgs
+	if err := json.Unmarshal(rawArgs, &args); err != nil {
+		s.writeResponse(conn, Response{OK: false, Error: fmt.Sprintf("invalid exec args: %v", err)})
+		return
+	}
+	if len(args.Cmd) == 0 {
+		s.writeResponse(conn, Response{OK: false, Error: "empty command"})
+		return
+	}
+
+	select {
+	case <-s.doneCh:
+		s.writeResponse(conn, Response{OK: false, Error: "container already exited"})
+		return
+	default:
+	}
+
+	cwd := args.Cwd
+	if cwd == "" {
+		cwd = "/"
+	}
+
+	// 调用exec-contianer "litcontainer-runc exec-container --cwd <cwd> -- <cmd...>"
+	cmdArgs := append([]string{"exec-container", "--cwd", cwd, "--"}, args.Cmd...)
+	cmd := exec.Command(s.runcPath, cmdArgs...)
+	// 构造LITCONTAINER_EXEC_PID环境变量，触发nsenter
+	cmd.Env = append(args.Env, fmt.Sprintf("%s=%d", runtime.ExecPidEnv, s.initPid))
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		s.writeResponse(conn, Response{OK: false, Error: fmt.Sprintf("create stdin pipe: %v", err)})
+		stdinPipe.Close()
+		return
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		s.writeResponse(conn, Response{OK: false, Error: fmt.Sprintf("create stdout pipe: %v", err)})
+		stdoutPipe.Close()
+		stdinPipe.Close()
+		return
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		s.writeResponse(conn, Response{OK: false, Error: fmt.Sprintf("create stderr pipe: %v", err)})
+		stderrPipe.Close()
+		stdoutPipe.Close()
+		stdinPipe.Close()
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		s.writeResponse(conn, Response{OK: false, Error: fmt.Sprintf("start exec command: %v", err)})
+		return
+	}
+
+	// exec成功启动，准备转换换输入输出流
+	if err := s.writeResponse(conn, Response{OK: true}); err != nil {
+		logger.Error("write exec response: %v", err)
+		cmd.Process.Kill()
+		_ = cmd.Wait()
+		return
+	}
+
+	// 处理stdin,不需要设置frame
+	go func() {
+		// reader返回EOF或stdinPipe被关闭时，io.Copy会退出
+		io.Copy(stdinPipe, reader)
+		stdinPipe.Close()
+	}()
+
+	// stdout、stderr设置frame然后直接写到conn中
+	writer := stdcopy.NewWriter(conn)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		// EOF或stdoutPipe被关闭时，io.Copy会退出
+		io.Copy(writer.Stdout(), stdoutPipe)
+	}()
+	go func() {
+		defer wg.Done()
+		// EOF或stderrPipe被关闭时，io.Copy会退出
+		io.Copy(writer.Stderr(), stderrPipe)
+	}()
+	wg.Wait()
+
+	code := 0
+	if err := cmd.Wait(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else {
+			logger.Warn("exec wait: %v", err)
+			code = -1
+		}
+	}
+
+	// 写入exit code，通知shim对端exec命令已经结束了
+	if err := writer.WriteExit(code); err != nil {
+		logger.Warn("exec: write exit frame: %v", err)
+	}
+	logger.Info("exec finished, code=%d", code)
 }

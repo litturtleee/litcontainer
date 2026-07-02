@@ -240,6 +240,49 @@ var RuntimeDeleteCommand = cli.Command{
 	},
 }
 
+var RuntimeExecContainerCommand = cli.Command{
+	Name:      "exec-container",
+	Usage:     "internal: exec a process inside a container's namespaces (used by shim)",
+	ArgsUsage: "<command> [args...]",
+	Hidden:    true,
+	Flags: []cli.Flag{
+		&cli.StringFlag{Name: "cwd", Usage: "working directory inside the container"},
+	},
+	Action: func(context *cli.Context) error {
+		args := context.Args()
+		if len(args) == 0 {
+			return fmt.Errorf("exec-container: no command specified")
+		}
+
+		cwd := context.String("cwd")
+		if cwd == "" {
+			cwd = "/"
+		}
+		if err := os.Chdir(cwd); err != nil {
+			return fmt.Errorf("chdir %s: %w", cwd, err)
+		}
+
+		path, err := exec.LookPath(args[0])
+		if err != nil {
+			return fmt.Errorf("lookup command %s: %w", args[0], err)
+		}
+
+		// 去掉 LITCONTAINER_EXEC_PID，避免泄漏给用户进程
+		env := make([]string, 0, len(os.Environ()))
+		for _, e := range os.Environ() {
+			if strings.HasPrefix(e, runtime.ExecPidEnv+"=") {
+				continue
+			}
+			env = append(env, e)
+		}
+
+		if err := syscall.Exec(path, []string(args), env); err != nil {
+			return fmt.Errorf("exec %s: %w", path, err)
+		}
+		return nil
+	},
+}
+
 type containerProcess struct {
 	initCmd *exec.Cmd
 	cgroup  *cgroups.CGroupManager
@@ -265,7 +308,7 @@ func setupContainer(spec *runtime.Spec, bundle, id, pidFile string) (*containerP
 	}
 	containerProcess.cleanup = runCleanups
 
-	// 1.mkfifo
+	// 1.mkfifo 用于发送start信号
 	fifoDir := filepath.Join(runtime.DefaultRuntimeStateRootPath, id)
 	if err := os.MkdirAll(fifoDir, 0755); err != nil {
 		return &containerProcess, fmt.Errorf("mkdir %s failed: %w", fifoDir, err)

@@ -22,16 +22,18 @@ func main() {
 	app.Version = version.AppVersion
 
 	app.Commands = []cli.Command{
+		cli2.CreateCommand,
+		cli2.StartCommand,
 		cli2.RunCommand,
 		cli2.ExportCommand,
 		cli2.PsCommand,
 		cli2.LogCommand,
 		cli2.ExecCommand,
-		cli2.ExecContainerCommand,
 		cli2.StopContainerCommand,
 		cli2.RemoveContainerCommand,
 		cli2.InspectContainerCommand,
 		cli2.NetworkCommands,
+		cli2.EventsCommand,
 	}
 
 	if err := app.Run(os.Args); err != nil {

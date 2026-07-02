@@ -6,6 +6,7 @@ import (
 	"litcontainer/internal/api/errdefs"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/daemon"
+	"litcontainer/internal/logger"
 	"net/http"
 	"strconv"
 	"syscall"
@@ -161,13 +162,64 @@ func (h *ContainerHandler) LogsContainer(c *gin.Context) {
 	if !ok {
 		return
 	}
-	logs, err := h.daemon.ContainerLogs(id)
+	follow := c.DefaultQuery("follow", "false") == "true"
+
+	// 设置为chunck HTTP 流
+	c.Header("Content-Type", "application/vnd.lit.raw-stream")
+
+	fw := &flushingWriter{w: c.Writer}
+
+	err := h.daemon.ContainerLogsStream(c.Request.Context(), id, follow, fw)
 	if err != nil {
+		if c.Writer.Written() {
+			logger.Warn("logs stream mid-error: %v", err)
+			return
+		}
 		responseError(c, err)
+	}
+}
+
+func (h *ContainerHandler) ExecContainer(c *gin.Context) {
+	id, ok := h.checkParamId(c)
+	if !ok {
 		return
 	}
-	// JSON marshal的时候会把[]byte变成base64字符串, 所以用c.Data()
-	c.Data(http.StatusOK, "text/plain; charset=utf-8", logs)
+
+	var req types.ExecRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, types.Error(errdefs.ErrInvalidParameter, err.Error(), err.Error()))
+		return
+	}
+
+	// 将http连接升级为hijack连接
+	hijacker, ok := c.Writer.(http.Hijacker)
+	if !ok {
+		c.JSON(http.StatusInternalServerError,
+			types.Error(errdefs.ErrInternalServerError, "hijack not supported",
+				"the server does not support hijacking"))
+		return
+	}
+	conn, bufioRw, err := hijacker.Hijack()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError,
+			types.Error(errdefs.ErrInternalServerError, "hijack failed",
+				fmt.Sprintf("failed to hijack connection: %v", err)))
+		return
+	}
+	defer conn.Close()
+
+	// hijack后, gin不再响应，手动通知client握手成功，发送200响应行和Content-Type头，告知client后续是exec-stream
+	if _, err := conn.Write([]byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: application/vnd.lit.exec-stream\r\n\r\n")); err != nil {
+		logger.Warn("exec: write 200 line: %v", err)
+		return
+	}
+
+	if err := h.daemon.ContainerExec(id, req, conn, bufioRw.Reader); err != nil {
+		errJSON := fmt.Sprintf(`{"ok":false,"error":%q}`+"\n", err.Error())
+		_, _ = conn.Write([]byte(errJSON))
+		logger.Warn("exec: %v", err)
+	}
 }
 
 // --- 内部方法 ---
@@ -194,4 +246,16 @@ func (h *ContainerHandler) parseSignal(signal string) (syscall.Signal, error) {
 	default:
 		return 0, fmt.Errorf("invalid signal: %s", signal)
 	}
+}
+
+// flushingWriter 包装 gin.ResponseWriter，每次 Write 后立即 Flush
+// 用途：保证 chunked HTTP 流的数据立刻送达 client（而不是等内部 buffer 满）
+type flushingWriter struct {
+	w gin.ResponseWriter
+}
+
+func (fw *flushingWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	fw.w.Flush()
+	return n, err
 }

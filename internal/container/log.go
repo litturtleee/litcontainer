@@ -1,3 +1,32 @@
+//init 进程
+//   │ stdout (pipe)              ┌──────────────────────────────┐
+//   ▼                             │                              │
+//┌────────────────┐              │      container.log           │
+//│ shim goroutine │── frame ────►│  [01 ... hello]              │
+//│  stdout copy   │              │  [02 ... ERROR]              │
+//└────────────────┘              │  [01 ... world]              │
+//                                 │                              │
+//   │ stderr (pipe)              │  ← framed bytes，daemon 不解析│
+//   ▼                             └──────────┬───────────────────┘
+//┌────────────────┐                          │
+//│ shim goroutine │── frame ──────────► (写)│
+//│  stderr copy   │                          │
+//└────────────────┘                          ▼
+//                                  ┌──────────────────┐
+//                                  │ daemon 用 chunked │
+//                                  │ HTTP 把文件内容   │
+//                                  │ 流式 passthrough  │
+//                                  └────────┬─────────┘
+//                                           │
+//                                           ▼ HTTP body (framed bytes in chunks)
+//                                  ┌──────────────────┐
+//                                  │ client stdcopy   │
+//                                  │ Demux            │
+//                                  └─┬──────────────┬─┘
+//                                    ▼              ▼
+//                                  stdout         stderr
+//                                  (终端)         (终端)
+
 package container
 
 import (

@@ -20,6 +20,7 @@ func SetupRoutes(r *gin.Engine, d *daemon.Daemon) {
 	containerHandler := handlers.NewContainerHandler(d)
 	networkHandler := handlers.NewNetworkHandler(d)
 	imageHandler := handlers.NewImageHandler(d)
+	eventsHandler := handlers.NewEventsHandler(d)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -60,6 +61,7 @@ func SetupRoutes(r *gin.Engine, d *daemon.Daemon) {
 			authProtected.POST("/logout", authHandler.Logout)
 		}
 
+		// 容器
 		containers := v1.Group("/containers")
 		{
 			// 为了验证先把auth的middleware去掉
@@ -72,7 +74,11 @@ func SetupRoutes(r *gin.Engine, d *daemon.Daemon) {
 			containers.GET("/list", containerHandler.ListContainers)
 			containers.GET("/:id", containerHandler.InspectContainer)
 			containers.GET("/:id/logs", containerHandler.LogsContainer)
+			containers.POST("/:id/exec", containerHandler.ExecContainer)
 		}
+
+		// 事件流
+		v1.GET("/events", eventsHandler.StreamEvents)
 	}
 	// 镜像相关路由
 	images := v1.Group("/images")

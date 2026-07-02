@@ -6,9 +6,77 @@ import (
 	"github.com/urfave/cli"
 	"litcontainer/internal/api/types"
 	"litcontainer/internal/client"
-	"litcontainer/internal/container"
+	"litcontainer/internal/events"
 	"litcontainer/internal/logger"
+	"os"
+	"strings"
+	"time"
 )
+
+var CreateCommand = cli.Command{
+	Name:  "create",
+	Usage: "Create a container without starting it",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{Name: "it", Usage: "Allocate a tty"},
+		&cli.StringFlag{Name: "name", Usage: "Assign a name to the container"},
+		&cli.StringFlag{Name: "m", Usage: "Memory limit, e.g., 100m 1g"},
+		&cli.StringFlag{Name: "cpus", Usage: "CPU limit, e.g., 1 1.5"},
+		&cli.StringSliceFlag{Name: "v", Usage: "Mount a volume"},
+		&cli.StringSliceFlag{Name: "e", Usage: "Set environment variables"},
+		&cli.StringFlag{Name: "net", Usage: "Assign a network"},
+		&cli.StringSliceFlag{Name: "p", Usage: "Publish container's port(s) to host"},
+	},
+	Action: func(c *cli.Context) error {
+		args := c.Args()
+		if len(args) < 2 {
+			return fmt.Errorf("create command needs at least two arguments (image + command), %w",
+				client.ErrInvalidArguments)
+		}
+		containerName := c.String("name")
+		if containerName == "" {
+			return fmt.Errorf("container name can not be empty, %w", client.ErrInvalidArguments)
+		}
+		mounts, err := parseMountVolume(c.StringSlice("v"))
+		if err != nil {
+			return err
+		}
+		cliCl := client.NewClient()
+		id, err := cliCl.ContainerCreate(types.ContainerCreateRequest{
+			Name:         containerName,
+			Image:        args[0],
+			Command:      args[1:],
+			Env:          c.StringSlice("e"),
+			Mounts:       mounts,
+			CPULimit:     c.String("cpus"),
+			MemoryLimit:  c.String("m"),
+			Network:      c.String("net"),
+			PortMappings: c.StringSlice("p"),
+			TTY:          c.Bool("it"),
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Println(id)
+		return nil
+	},
+}
+
+var StartCommand = cli.Command{
+	Name:  "start",
+	Usage: "Start one or more stopped (or created) containers",
+	Action: func(c *cli.Context) error {
+		if c.NArg() == 0 {
+			return fmt.Errorf("at least one container name or ID must be specified, %w", client.ErrInvalidArguments)
+		}
+		idOrName := c.Args().First()
+		cliCl := client.NewClient()
+		if err := cliCl.StartContainer(idOrName); err != nil {
+			return err
+		}
+		fmt.Println(idOrName)
+		return nil
+	},
+}
 
 var RunCommand = cli.Command{
 	Name:  "run",
@@ -122,9 +190,8 @@ var RunCommand = cli.Command{
 		if err := cli.WaitContainer(id); err != nil {
 			return err
 		}
-		logs, _ := cli.LogsContainer(id)
-		fmt.Println(string(logs))
-		return nil
+
+		return cli.LogsContainerStream(id, false, os.Stdout, os.Stderr)
 	},
 }
 
@@ -159,56 +226,59 @@ var LogCommand = cli.Command{
 
 		follow := c.Bool("f")
 
-		if follow {
-			return fmt.Errorf("follow not support now")
-		}
-
 		cli := client.NewClient()
-		logs, err := cli.LogsContainer(containerIDOrName)
-		if err != nil {
-			return err
-		}
-		fmt.Println(string(logs))
-		return nil
+		return cli.LogsContainerStream(containerIDOrName, follow, os.Stdout, os.Stderr)
 	},
 }
 
-// todo:没改
 var ExecCommand = cli.Command{
-	Name:  "exec",
-	Usage: "Execute a command in a running container",
+	Name:      "exec",
+	Usage:     "Execute a command in a running container",
+	ArgsUsage: "<container> <command> [args...]",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{
-			Name:  "it",
-			Usage: "Run in interactive mode",
+		&cli.StringSliceFlag{
+			Name:  "e",
+			Usage: "Set environment variables, e.g., -e KEY=VAL",
+		},
+		&cli.StringFlag{
+			Name:  "w",
+			Usage: "Working directory inside container (default /)",
 		},
 	},
 	Action: func(c *cli.Context) error {
-		if len(c.Args()) < 2 {
-			return fmt.Errorf("usage: litcontainer exec [-it] <name> <command> [args...], %w",
+		args := c.Args()
+		if len(args) < 2 {
+			return fmt.Errorf("usage: litcontainer exec [-e KEY=VAL] [-w cwd] <container> <command> [args...], %w",
 				client.ErrInvalidArguments)
 		}
-		enableTTY := c.Bool("it")
-		containerName := c.Args().Get(0)
-		args := c.Args()[1:]
+		idOrName := args[0]
+		cmd := args[1:]
+		env := c.StringSlice("e")
+		cwd := c.String("w")
 
-		if err := container.Exec(enableTTY, containerName, args); err != nil {
-			logger.Error("exec command error: %v", err)
+		// 兜底 PATH，防止 exec-container 的 LookPath 找不到命令
+		hasPath := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "PATH=") {
+				hasPath = true
+				break
+			}
+		}
+		if !hasPath {
+			env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		}
+
+		cliCl := client.NewClient()
+		exitCode, err := cliCl.ExecContainer(idOrName, types.ExecRequest{
+			Cmd: cmd,
+			Env: env,
+			Cwd: cwd,
+		}, os.Stdin, os.Stdout, os.Stderr)
+		if err != nil {
 			return err
 		}
-		return nil
-	},
-}
-
-// todo:没改
-var ExecContainerCommand = cli.Command{
-	Name:   "exec-container",
-	Usage:  "Execute a command in a running container, Do not call it outside",
-	Hidden: true,
-	Action: func(c *cli.Context) error {
-		if err := container.ExecContainer(c.Args()); err != nil {
-			logger.Error("exec-container command error: %v", err)
-			return err
+		if exitCode != 0 {
+			os.Exit(exitCode)
 		}
 		return nil
 	},
@@ -288,5 +358,28 @@ var InspectContainerCommand = cli.Command{
 		configByte, _ := json.Marshal(inspectContainer)
 		fmt.Println(string(configByte))
 		return nil
+	},
+}
+
+var EventsCommand = cli.Command{
+	Name:  "events",
+	Usage: "Steam container events",
+	Action: func(c *cli.Context) error {
+		cli := client.NewClient()
+		return cli.EventsStream(func(e events.Event) error {
+			id := e.ContainerId
+			if len(id) > 12 {
+				id = id[:12]
+			}
+			fmt.Printf("%s  container  %-8s  %s",
+				e.Time.Format(time.RFC3339),
+				e.Type,
+				id)
+			for k, v := range e.Attrs {
+				fmt.Printf("  %s=%s", k, v)
+			}
+			fmt.Println()
+			return nil
+		})
 	},
 }
